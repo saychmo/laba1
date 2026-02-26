@@ -1,6 +1,7 @@
 import sys
 import os
 from datetime import datetime
+from PyQt6 import QtCore
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QTextEdit, QVBoxLayout, QWidget,
     QMenuBar, QToolBar, QStatusBar, QMessageBox, QFileDialog,
@@ -9,6 +10,8 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import QAction, QFont, QKeySequence, QCloseEvent
 from PyQt6.QtCore import Qt
 from typing import Optional
+from PyQt6.QtWidgets import QStyle
+from PyQt6.QtCore import Qt, QSize
 
 
 class TextEditor(QMainWindow):
@@ -333,25 +336,96 @@ class TextEditor(QMainWindow):
         help_menu.addAction(about_action)
 
     def create_toolbar(self):
-        """Создание панели инструментов"""
+        """Создание панели инструментов с иконками"""
         toolbar = QToolBar("Панель инструментов")
+        toolbar.setIconSize(QtCore.QSize(24, 24))  # Размер иконок
         self.addToolBar(toolbar)
-        
-        # Добавляем кнопки (как в предыдущей версии)
-        new_action = QAction("Создать", self)
+    
+        # 1. Создать
+        new_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
+        new_action = QAction(new_icon, "Создать", self)
+        new_action.setShortcut(QKeySequence.StandardKey.New)
         new_action.triggered.connect(self.new_file)
         toolbar.addAction(new_action)
-        
-        open_action = QAction("Открыть", self)
+    
+        # 2. Открыть
+        open_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton)
+        open_action = QAction(open_icon, "Открыть", self)
+        open_action.setShortcut(QKeySequence.StandardKey.Open)
         open_action.triggered.connect(self.open_file)
         toolbar.addAction(open_action)
-        
-        save_action = QAction("Сохранить", self)
+    
+        # 3. Сохранить
+        save_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton)
+        save_action = QAction(save_icon, "Сохранить", self)
+        save_action.setShortcut(QKeySequence.StandardKey.Save)
         save_action.triggered.connect(self.save_file)
         toolbar.addAction(save_action)
-        
+    
         toolbar.addSeparator()
-        # ... остальные кнопки как в предыдущей версии ...
+    
+        # 4. Отменить
+        undo_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowBack)
+        undo_action = QAction(undo_icon, "Отменить", self)
+        undo_action.setShortcut(QKeySequence.StandardKey.Undo)
+        undo_action.triggered.connect(self.editor.undo)
+        toolbar.addAction(undo_action)
+    
+        # 5. Повторить
+        redo_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowForward)
+        redo_action = QAction(redo_icon, "Повторить", self)
+        redo_action.setShortcut(QKeySequence.StandardKey.Redo)
+        redo_action.triggered.connect(self.editor.redo)
+        toolbar.addAction(redo_action)
+    
+        toolbar.addSeparator()
+    
+        # 6. Копировать
+        copy_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)  # Заменим на свою
+        copy_action = QAction(copy_icon, "Копировать", self)
+        copy_action.setShortcut(QKeySequence.StandardKey.Copy)
+        copy_action.triggered.connect(self.editor.copy)
+        toolbar.addAction(copy_action)
+    
+        # 7. Вырезать
+        cut_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)  # Заменим на свою
+        cut_action = QAction(cut_icon, "Вырезать", self)
+        cut_action.setShortcut(QKeySequence.StandardKey.Cut)
+        cut_action.triggered.connect(self.editor.cut)
+        toolbar.addAction(cut_action)
+    
+        # 8. Вставить
+        paste_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogStart)  # Заменим
+        paste_action = QAction(paste_icon, "Вставить", self)
+        paste_action.setShortcut(QKeySequence.StandardKey.Paste)
+        paste_action.triggered.connect(self.editor.paste)
+        toolbar.addAction(paste_action)
+    
+        toolbar.addSeparator()
+    
+        # 9. Запуск анализа
+        run_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay)
+        run_action = QAction(run_icon, "Запуск анализа", self)
+        run_action.triggered.connect(self.run_parser)
+        toolbar.addAction(run_action)
+    
+        toolbar.addSeparator()
+    
+        # 10. Справка
+        help_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DialogHelpButton)
+        help_action = QAction(help_icon, "Справка", self)
+        help_action.setShortcut(QKeySequence.StandardKey.HelpContents)
+        help_action.triggered.connect(self.show_help)
+        toolbar.addAction(help_action)
+    
+        # 11. О программе
+        info_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxInformation)
+        info_action = QAction(info_icon, "О программе", self)
+        info_action.triggered.connect(self.show_about)
+        toolbar.addAction(info_action)
+    
+        # Добавляем всплывающие подсказки
+        toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
 
     def show_info(self, item_name):
         """Показать информацию в области вывода"""
