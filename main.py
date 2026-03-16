@@ -4,21 +4,22 @@ from datetime import datetime
 from PyQt6 import QtCore
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QTextEdit, QVBoxLayout, QWidget,
-    QMenuBar, QToolBar, QStatusBar, QMessageBox, QFileDialog,
-    QSplitter
+    QToolBar, QStatusBar, QMessageBox, QFileDialog,
+    QSplitter, QTableWidget, QTableWidgetItem  
 )
-from PyQt6.QtGui import QAction, QFont, QKeySequence, QCloseEvent
+from PyQt6.QtGui import QAction, QCloseEvent, QTextCursor, QFont, QKeySequence
 from PyQt6.QtCore import Qt
 from typing import Optional
 from PyQt6.QtWidgets import QStyle
-from PyQt6.QtCore import Qt, QSize
+from PyQt6.QtCore import Qt
+from scanner import analyze_text, TokenType
 
 
 class TextEditor(QMainWindow):
     def __init__(self):
         super().__init__()
         self.current_file = None
-        self.is_modified = False  # Флаг: были ли изменения после последнего сохранения
+        self.is_modified = False  
         self.init_ui()
         self.connect_signals()
 
@@ -27,46 +28,80 @@ class TextEditor(QMainWindow):
         self.setWindowTitle("Новый документ - Текстовый редактор")
         self.setGeometry(100, 100, 1200, 800)
 
-        # Центральный виджет
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
 
-        # Главный layout
         main_layout = QVBoxLayout(central_widget)
 
-        # Сплиттер для областей
         splitter = QSplitter(Qt.Orientation.Vertical)
 
-        # Область редактирования
         self.editor = QTextEdit()
         self.editor.setFont(QFont("Courier New", 11))
         splitter.addWidget(self.editor)
 
-        # Область вывода (read-only)
-        self.output_area = QTextEdit()
-        self.output_area.setFont(QFont("Courier New", 11))
-        self.output_area.setReadOnly(True)
-        self.output_area.setPlaceholderText("Результаты работы языкового процессора будут здесь...")
-        splitter.addWidget(self.output_area)
+        self.output_table = QTableWidget()
+        self.output_table.setColumnCount(4)
+        self.output_table.setHorizontalHeaderLabels(["Код", "Тип лексемы", "Лексема", "Местоположение"])
+        self.output_table.setAlternatingRowColors(True)
+        self.output_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers) 
+        self.output_table.cellClicked.connect(self.on_error_clicked)
+        splitter.addWidget(self.output_table)
 
         splitter.setSizes([600, 200])
         main_layout.addWidget(splitter)
 
-        # Статус бар
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("Готов к работе")
 
-        # Создание меню и панели инструментов
         self.create_menu()
         self.create_toolbar()
-
-        # Обновление заголовка окна
         self.update_window_title()
+
+    def run_parser_table(self):
+        """Запуск лексического анализатора с выводом в таблицу"""
+        text = self.editor.toPlainText()
+        
+        if not text.strip():
+            QMessageBox.warning(self, "Предупреждение", "Введите текст для анализа")
+            return
+        
+        try:
+            tokens, errors = analyze_text(text)
+            self.output_table.setRowCount(0)
+            valid_tokens = [t for t in tokens if t.type != TokenType.WHITESPACE]
+            self.output_table.setRowCount(len(valid_tokens))
+            
+            for row, token in enumerate(valid_tokens):
+                self.output_table.setItem(row, 0, QTableWidgetItem(str(token.code)))
+                type_name = {
+                    TokenType.KEYWORD: "Ключевое слово",
+                    TokenType.IDENTIFIER: "Идентификатор",
+                    TokenType.OPERATOR: "Оператор",
+                    TokenType.PIPE: "Разделитель |",
+                    TokenType.SEPARATOR: "Разделитель ;",
+                    TokenType.ERROR: "ОШИБКА"
+                }.get(token.type, token.type.name)
+                self.output_table.setItem(row, 1, QTableWidgetItem(type_name))
+                self.output_table.setItem(row, 2, QTableWidgetItem(token.value))
+                pos = f"{token.line}:{token.start_pos}-{token.end_pos}"
+                self.output_table.setItem(row, 3, QTableWidgetItem(pos))
+
+            self.output_table.resizeColumnsToContents()
+            
+            if errors:
+                error_msg = "\n".join([f"❌ '{e.value}' в строке {e.line}, позиция {e.start_pos}" for e in errors])
+                QMessageBox.warning(self, "Ошибки анализа", f"Обнаружено {len(errors)} ошибок:\n{error_msg}")
+            else:
+                QMessageBox.information(self, "Анализ завершен", f"Успешно распознано {len(valid_tokens)} лексем")
+            
+            self.status_bar.showMessage(f"Анализ завершен: {len(valid_tokens)} лексем, {len(errors)} ошибок")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Ошибка при анализе:\n{str(e)}")
 
     def connect_signals(self):
         """Подключение сигналов для отслеживания изменений"""
-        # Сигнал изменения текста в редакторе
         self.editor.textChanged.connect(self.on_text_changed)
 
     def on_text_changed(self):
@@ -83,7 +118,6 @@ class TextEditor(QMainWindow):
         else:
             file_name = "Новый документ"
         
-        # Добавляем звездочку, если есть несохраненные изменения
         modified_mark = " *" if self.is_modified else ""
         self.setWindowTitle(f"{file_name}{modified_mark} - Текстовый редактор")
 
@@ -96,9 +130,8 @@ class TextEditor(QMainWindow):
             False - пользователь отменил действие
         """
         if not self.is_modified:
-            return True  # Нет несохраненных изменений
+            return True  
         
-        # Спрашиваем пользователя
         reply = QMessageBox.question(
             self,
             "Несохраненные изменения",
@@ -106,53 +139,152 @@ class TextEditor(QMainWindow):
             QMessageBox.StandardButton.Save | 
             QMessageBox.StandardButton.Discard | 
             QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Save  # Кнопка по умолчанию
+            QMessageBox.StandardButton.Save
         )
         
         if reply == QMessageBox.StandardButton.Save:
-            # Сохраняем файл
             return self.save_file()
         elif reply == QMessageBox.StandardButton.Discard:
-            # Не сохраняем, просто продолжаем
             return True
-        else:  # Cancel
-            # Отменяем действие
+        else:
             return False
 
     def closeEvent(self, event: Optional[QCloseEvent]) -> None:
         """Обработчик закрытия окна (выход из программы)"""
         if self.check_save_before_action("выходом"):
             if event:
-                event.accept()  # Разрешаем закрытие
+                event.accept()
         else:
             if event:
-                event.ignore()  # Отменяем закрытие
-    # ==================== РАБОТА С ФАЙЛАМИ ====================
+                event.ignore()
+    
+    def on_error_clicked(self, row: int, column: int):
+        """
+        Обработчик клика по ячейке таблицы.
+        """
+        try:
+            code_item = self.output_table.item(row, 0)
+            if not code_item or code_item.text() != "-1":
+                return
+            
+            pos_item = self.output_table.item(row, 3)
+            if not pos_item:
+                return
+            
+            pos_text = pos_item.text()
+            print(f"Нажата ошибка: позиция '{pos_text}'")
+            self.debug_line_count()
+            
+            if ':' in pos_text:
+                parts = pos_text.split(':')
+                if len(parts) >= 2:
+                    try:
+                        line = int(parts[0])
+
+                        if '-' in parts[1]:
+                            start_pos = int(parts[1].split('-')[0])
+                        else:
+                            start_pos = int(parts[1])
+                        
+                        print(f"Переход к строке {line}, позиция {start_pos}")
+                        
+                        self.navigate_to_error_absolute(line, start_pos)
+                        
+                    except ValueError as e:
+                        print(f"Ошибка преобразования чисел: {e}")
+        except Exception as e:
+            print(f"Общая ошибка: {e}")
+
+    def navigate_to_error_absolute(self, line: int, position: int):
+        """
+        Перемещает курсор в редакторе на указанную позицию через абсолютные координаты
+        с защитой от выхода за границы
+        """
+        text = self.editor.toPlainText()
+        lines = text.splitlines(True)
+        editor_line_count = self.editor.document().blockCount()
+        print(f"Строк в редакторе: {editor_line_count}, запрошена строка: {line}")
+        
+        if line < 1:
+            line = 1
+        elif line > editor_line_count:
+            print(f"Строка {line} вне диапазона. Используем последнюю строку ({editor_line_count})")
+            line = editor_line_count
+        
+        text_lines = text.split('\n')
+        
+        if line < 1 or line > len(text_lines):
+            print(f"Строка {line} вне диапазона text_lines (всего: {len(text_lines)})")
+            cursor = self.editor.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            self.editor.setTextCursor(cursor)
+            self.editor.setFocus()
+            self.editor.ensureCursorVisible()
+            self.status_bar.showMessage(f"Не удалось найти строку {line}, переход в конец")
+            return
+        
+        abs_pos = 0
+        for i in range(line - 1):
+            abs_pos += len(text_lines[i]) + 1 
+        
+        max_pos = len(text_lines[line - 1])
+        if position > max_pos:
+            print(f"Позиция {position} больше длины строки ({max_pos}). Используем {max_pos}")
+            position = max_pos
+        
+        abs_pos += position
+        
+        print(f"Переход: строка {line}, позиция {position}, абсолютная позиция: {abs_pos}")
+        
+        cursor = self.editor.textCursor()
+        cursor.setPosition(abs_pos)
+        self.editor.setTextCursor(cursor)
+        self.editor.setFocus()
+        self.editor.ensureCursorVisible()
+        
+        self.status_bar.showMessage(f"Переход к ошибке: строка {line}, позиция {position}")
+
+    def debug_line_count(self):
+        """Временный метод для отладки количества строк"""
+        text = self.editor.toPlainText()
+        lines_split = text.split('\n')
+        block_count = self.editor.document().blockCount()
+        
+        print(f"len(split('\\n')): {len(lines_split)}")
+        print(f"blockCount(): {block_count}")
+        print(f"Всего символов: {len(text)}")
+        
+        for i, line in enumerate(lines_split):
+            print(f"Строка {i+1}: длина {len(line)}, символы: '{line}'")
+        
+        return block_count
 
     def new_file(self):
-        """Создать новый файл с проверкой сохранения"""
         if not self.check_save_before_action("созданием нового документа"):
-            return  # Пользователь отменил создание
-        
+            return
+    
         self.editor.clear()
         self.current_file = None
         self.is_modified = False
         self.update_window_title()
-        
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        self.output_area.append(f"[{timestamp}] [СИСТЕМА] Создан новый документ")
+    
+        row = self.output_table.rowCount()
+        self.output_table.insertRow(row)
+        self.output_table.setItem(row, 0, QTableWidgetItem("СИСТ"))
+        self.output_table.setItem(row, 1, QTableWidgetItem("Система"))
+        self.output_table.setItem(row, 2, QTableWidgetItem("Создан новый документ"))
+        self.output_table.setItem(row, 3, QTableWidgetItem(datetime.now().strftime("%H:%M:%S")))
+    
         self.status_bar.showMessage("Новый документ создан")
-
+    
     def open_file(self):
-        """Открыть файл с проверкой сохранения"""
+        """Открыть файл"""
         if not self.check_save_before_action("открытием другого файла"):
-            return  # Пользователь отменил открытие
+            return
         
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "Открыть файл", "examples/",
-            "Все поддерживаемые форматы (*.txt *.py *.kotik *.mrk);;"
-            "Текстовые файлы (*.txt);;"
-            "Все файлы (*.*)"
+            self, "Открыть файл", "",
+            "Текстовые файлы (*.txt);;Все файлы (*.*)"
         )
         
         if file_path:
@@ -162,19 +294,16 @@ class TextEditor(QMainWindow):
                 
                 self.editor.setText(text)
                 self.current_file = file_path
-                self.is_modified = False  # 👈 Важно: сбрасываем флаг
+                self.is_modified = False
                 self.update_window_title()
+                row = self.output_table.rowCount()
+                self.output_table.insertRow(row)
+                self.output_table.setItem(row, 0, QTableWidgetItem("СИСТ"))
+                self.output_table.setItem(row, 1, QTableWidgetItem("Система"))
+                self.output_table.setItem(row, 2, QTableWidgetItem(f"Открыт: {os.path.basename(file_path)}"))
+                self.output_table.setItem(row, 3, QTableWidgetItem(datetime.now().strftime("%H:%M:%S")))
                 
-                # Вывод информации
-                file_name = os.path.basename(file_path)
-                line_count = len(text.splitlines())
-                
-                timestamp = datetime.now().strftime("%H:%M:%S")
-                self.output_area.append(f"\n[{timestamp}] [СИСТЕМА] Загружен файл: {file_name}")
-                self.output_area.append(f"[СИСТЕМА] Строк: {line_count}")
-                self.output_area.append("─" * 50)
-                
-                self.status_bar.showMessage(f"Открыт файл: {file_name}")
+                self.status_bar.showMessage(f"Открыт файл: {os.path.basename(file_path)}")
                 
             except Exception as e:
                 QMessageBox.critical(self, "Ошибка", f"Не удалось открыть файл:\n{str(e)}")
@@ -187,22 +316,25 @@ class TextEditor(QMainWindow):
                 with open(self.current_file, 'w', encoding='utf-8') as file:
                     file.write(text)
                 
-                self.is_modified = False  # 👈 Сбрасываем флаг
+                self.is_modified = False
                 self.update_window_title()
                 
-                file_name = os.path.basename(self.current_file)
-                timestamp = datetime.now().strftime("%H:%M:%S")
-                self.output_area.append(f"[{timestamp}] [СИСТЕМА] Сохранен файл: {file_name}")
-                self.status_bar.showMessage(f"Файл сохранен: {file_name}")
+                row = self.output_table.rowCount()
+                self.output_table.insertRow(row)
+                self.output_table.setItem(row, 0, QTableWidgetItem("СИСТ"))
+                self.output_table.setItem(row, 1, QTableWidgetItem("Система"))
+                self.output_table.setItem(row, 2, QTableWidgetItem(f"Сохранен: {os.path.basename(self.current_file)}"))
+                self.output_table.setItem(row, 3, QTableWidgetItem(datetime.now().strftime("%H:%M:%S")))
                 
-                return True  # Успешно сохранено
+                self.status_bar.showMessage(f"Файл сохранен: {os.path.basename(self.current_file)}")
+                return True
                 
             except Exception as e:
                 QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить файл:\n{str(e)}")
-                return False  # Ошибка сохранения
+                return False
         else:
-            return self.save_file_as()  # Перенаправляем на "Сохранить как"
-
+            return self.save_file_as()
+        
     def save_file_as(self):
         """Сохранить файл с новым именем"""
         file_path, _ = QFileDialog.getSaveFileName(
@@ -213,31 +345,31 @@ class TextEditor(QMainWindow):
         )
         
         if file_path:
-            # Добавляем расширение .txt, если не указано
             if not file_path.endswith('.txt'):
                 file_path += '.txt'
             
             self.current_file = file_path
-            return self.save_file()  # Вызываем обычное сохранение
+            return self.save_file()
         
-        return False  # Пользователь отменил сохранение
-
-    # ==================== МЕТОДЫ РЕДАКТИРОВАНИЯ ====================
+        return False
 
     def delete_text(self):
         """Удалить выделенный текст"""
         cursor = self.editor.textCursor()
         if cursor.hasSelection():
             cursor.removeSelectedText()
-            # Флаг is_modified обновится автоматически через сигнал textChanged
-
-    # ==================== ПРОЧИЕ МЕТОДЫ ====================
+            
+            row = self.output_table.rowCount()
+            self.output_table.insertRow(row)
+            self.output_table.setItem(row, 0, QTableWidgetItem("ПРАВКА"))
+            self.output_table.setItem(row, 1, QTableWidgetItem("Система"))
+            self.output_table.setItem(row, 2, QTableWidgetItem("Текст удален"))
+            self.output_table.setItem(row, 3, QTableWidgetItem(datetime.now().strftime("%H:%M:%S")))
 
     def create_menu(self):
         """Создание меню"""
         menubar = self.menuBar()
 
-        # Файл
         file_menu = menubar.addMenu("Файл")
         
         new_action = QAction("Создать", self)
@@ -267,7 +399,6 @@ class TextEditor(QMainWindow):
         exit_action.triggered.connect(self.close)  # close вызовет closeEvent
         file_menu.addAction(exit_action)
 
-        # Правка
         edit_menu = menubar.addMenu("Правка")
         
         undo_action = QAction("Отменить", self)
@@ -309,7 +440,6 @@ class TextEditor(QMainWindow):
         select_all_action.triggered.connect(self.editor.selectAll)
         edit_menu.addAction(select_all_action)
 
-        # Текст
         text_menu = menubar.addMenu("Текст")
         text_menu.addAction("Постановка задачи", lambda: self.show_info("Постановка задачи"))
         text_menu.addAction("Грамматика", lambda: self.show_info("Грамматика"))
@@ -319,13 +449,11 @@ class TextEditor(QMainWindow):
         text_menu.addAction("Список литературы", lambda: self.show_info("Список литературы"))
         text_menu.addAction("Исходный код программы", lambda: self.show_info("Исходный код программы"))
 
-        # Пуск
         start_menu = menubar.addMenu("Пуск")
         start_action = QAction("Запустить синтаксический анализ", self)
         start_action.triggered.connect(self.run_parser)
         start_menu.addAction(start_action)
 
-        # Справка
         help_menu = menubar.addMenu("Справка")
         help_action = QAction("Вызов справки", self)
         help_action.triggered.connect(self.show_help)
@@ -340,22 +468,19 @@ class TextEditor(QMainWindow):
         toolbar = QToolBar("Панель инструментов")
         toolbar.setIconSize(QtCore.QSize(24, 24))  # Размер иконок
         self.addToolBar(toolbar)
-    
-        # 1. Создать
+
         new_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
         new_action = QAction(new_icon, "Создать", self)
         new_action.setShortcut(QKeySequence.StandardKey.New)
         new_action.triggered.connect(self.new_file)
         toolbar.addAction(new_action)
-    
-        # 2. Открыть
+
         open_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton)
         open_action = QAction(open_icon, "Открыть", self)
         open_action.setShortcut(QKeySequence.StandardKey.Open)
         open_action.triggered.connect(self.open_file)
         toolbar.addAction(open_action)
     
-        # 3. Сохранить
         save_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton)
         save_action = QAction(save_icon, "Сохранить", self)
         save_action.setShortcut(QKeySequence.StandardKey.Save)
@@ -364,14 +489,12 @@ class TextEditor(QMainWindow):
     
         toolbar.addSeparator()
     
-        # 4. Отменить
         undo_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowBack)
         undo_action = QAction(undo_icon, "Отменить", self)
         undo_action.setShortcut(QKeySequence.StandardKey.Undo)
         undo_action.triggered.connect(self.editor.undo)
         toolbar.addAction(undo_action)
-    
-        # 5. Повторить
+
         redo_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowForward)
         redo_action = QAction(redo_icon, "Повторить", self)
         redo_action.setShortcut(QKeySequence.StandardKey.Redo)
@@ -379,89 +502,184 @@ class TextEditor(QMainWindow):
         toolbar.addAction(redo_action)
     
         toolbar.addSeparator()
-    
-        # 6. Копировать
-        copy_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)  # Заменим на свою
+
+        copy_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon) 
         copy_action = QAction(copy_icon, "Копировать", self)
         copy_action.setShortcut(QKeySequence.StandardKey.Copy)
         copy_action.triggered.connect(self.editor.copy)
         toolbar.addAction(copy_action)
     
-        # 7. Вырезать
-        cut_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)  # Заменим на свою
+        cut_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon) 
         cut_action = QAction(cut_icon, "Вырезать", self)
         cut_action.setShortcut(QKeySequence.StandardKey.Cut)
         cut_action.triggered.connect(self.editor.cut)
         toolbar.addAction(cut_action)
     
-        # 8. Вставить
-        paste_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogStart)  # Заменим
+        paste_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogStart) 
         paste_action = QAction(paste_icon, "Вставить", self)
         paste_action.setShortcut(QKeySequence.StandardKey.Paste)
         paste_action.triggered.connect(self.editor.paste)
         toolbar.addAction(paste_action)
     
         toolbar.addSeparator()
-    
-        # 9. Запуск анализа
+
         run_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay)
         run_action = QAction(run_icon, "Запуск анализа", self)
         run_action.triggered.connect(self.run_parser)
         toolbar.addAction(run_action)
     
         toolbar.addSeparator()
-    
-        # 10. Справка
+
         help_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DialogHelpButton)
         help_action = QAction(help_icon, "Справка", self)
         help_action.setShortcut(QKeySequence.StandardKey.HelpContents)
         help_action.triggered.connect(self.show_help)
         toolbar.addAction(help_action)
-    
-        # 11. О программе
+
         info_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxInformation)
         info_action = QAction(info_icon, "О программе", self)
         info_action.triggered.connect(self.show_about)
         toolbar.addAction(info_action)
-    
-        # Добавляем всплывающие подсказки
+
         toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
 
     def show_info(self, item_name):
         """Показать информацию в области вывода"""
-        info_text = f"===== {item_name} =====\n"
-        info_text += "Этот раздел будет заполнен в рамках лабораторной работы.\n"
-        self.output_area.append(info_text)
+        row = self.output_table.rowCount()
+        self.output_table.insertRow(row)
+        self.output_table.setItem(row, 0, QTableWidgetItem("ИНФО"))
+        self.output_table.setItem(row, 1, QTableWidgetItem("Информация"))
+        self.output_table.setItem(row, 2, QTableWidgetItem(f"=== {item_name} ==="))
+        self.output_table.setItem(row, 3, QTableWidgetItem(datetime.now().strftime("%H:%M:%S")))
 
     def run_parser(self):
-        """Запуск анализатора"""
+        """Запуск лексического анализатора"""
         text = self.editor.toPlainText()
+        
         if not text.strip():
-            self.output_area.append("[ПАРСЕР] Ошибка: Нет текста для анализа!")
+            QMessageBox.warning(self, "Предупреждение", "Введите текст для анализа")
             return
         
-        char_count = len(text)
-        word_count = len(text.split())
-        line_count = len(text.split('\n'))
-        
-        result = f"""
-[РЕЗУЛЬТАТ АНАЛИЗА]
-Символов: {char_count}
-Слов: {word_count}
-Строк: {line_count}
-        """
-        self.output_area.append(result)
-        self.status_bar.showMessage("Анализ завершен")
+        try:
+            tokens, error_messages = analyze_text(text)
+            
+            self.output_table.setRowCount(0)
+            
+            row = self.output_table.rowCount()
+            self.output_table.insertRow(row)
+            self.output_table.setItem(row, 0, QTableWidgetItem("Код"))
+            self.output_table.setItem(row, 1, QTableWidgetItem("Тип"))
+            self.output_table.setItem(row, 2, QTableWidgetItem("Лексема"))
+            self.output_table.setItem(row, 3, QTableWidgetItem("Позиция"))
+            
+            current_line = 1
+            line_tokens = []
+            
+            valid_tokens = [t for t in tokens if t.type != TokenType.WHITESPACE]
+            
+            for token in valid_tokens:
+                row = self.output_table.rowCount()
+                self.output_table.insertRow(row)
 
+                code_item = QTableWidgetItem(str(token.code))
+                self.output_table.setItem(row, 0, code_item)
+                
+                type_name = {
+                    TokenType.KEYWORD: "Ключевое слово",
+                    TokenType.IDENTIFIER: "Идентификатор",
+                    TokenType.OPERATOR: "Оператор",
+                    TokenType.PIPE: "Разделитель |",
+                    TokenType.SEPARATOR: "Разделитель ;",
+                    TokenType.ERROR: "ОШИБКА"
+                }.get(token.type, token.type.name)
+                type_item = QTableWidgetItem(type_name)
+                self.output_table.setItem(row, 1, type_item)
+                
+                value_item = QTableWidgetItem(token.value)
+                self.output_table.setItem(row, 2, value_item)
+
+                pos_text = f"{token.line}:{token.start_pos}-{token.end_pos}"
+                pos_item = QTableWidgetItem(pos_text)
+                self.output_table.setItem(row, 3, pos_item)
+                
+                if token.type == TokenType.ERROR:
+                    for col in range(4):
+                        item = self.output_table.item(row, col)
+                        if item:
+                            item.setBackground(Qt.GlobalColor.red)
+                            item.setForeground(Qt.GlobalColor.white)
+            
+            row = self.output_table.rowCount()
+            self.output_table.insertRow(row)
+            self.output_table.setItem(row, 0, QTableWidgetItem("---"))
+
+            row = self.output_table.rowCount()
+            self.output_table.insertRow(row)
+            error_count = len([t for t in valid_tokens if t.type == TokenType.ERROR])
+            self.output_table.setItem(row, 2, QTableWidgetItem(f"Всего лексем: {len(valid_tokens)}, Ошибок: {error_count}"))
+            
+            self.output_table.resizeColumnsToContents()
+            
+            if error_count > 0:
+                QMessageBox.warning(self, "Ошибки анализа", f"Обнаружено {error_count} ошибок")
+                self.status_bar.showMessage(f"Анализ завершен: {len(valid_tokens)} лексем, {error_count} ошибок")
+            else:
+                QMessageBox.information(self, "Анализ завершен", f"Успешно распознано {len(valid_tokens)} лексем")
+                self.status_bar.showMessage(f"Анализ завершен: {len(valid_tokens)} лексем, ошибок нет")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Ошибка при анализе:\n{str(e)}")
+    
     def show_help(self):
         """Показать справку"""
-        QMessageBox.information(self, "Справка", "Руководство пользователя...")
-
+        help_text = """
+        РУКОВОДСТВО ПОЛЬЗОВАТЕЛЯ
+        
+        Файл: Создание, открытие, сохранение файлов
+        Правка: Редактирование текста
+        Текст: Информация о лабораторной работе
+        Пуск: Запуск лексического анализатора
+        Справка: Информация о программе
+        
+        Горячие клавиши:
+        Ctrl+N - Создать
+        Ctrl+O - Открыть
+        Ctrl+S - Сохранить
+        Ctrl+Z - Отменить
+        Ctrl+Y - Повторить
+        Ctrl+X - Вырезать
+        Ctrl+C - Копировать
+        Ctrl+V - Вставить
+        Ctrl+A - Выделить все
+        """
+        
+        row = self.output_table.rowCount()
+        self.output_table.insertRow(row)
+        self.output_table.setItem(row, 0, QTableWidgetItem("СПРАВКА"))
+        self.output_table.setItem(row, 1, QTableWidgetItem(""))
+        self.output_table.setItem(row, 2, QTableWidgetItem(help_text))
+        self.output_table.setItem(row, 3, QTableWidgetItem(datetime.now().strftime("%H:%M:%S")))
+        
+        QMessageBox.information(self, "Справка", help_text)
+    
     def show_about(self):
-        """О программе"""
-        QMessageBox.about(self, "О программе", 
-            "<h3>Текстовый редактор с языковым процессором</h3>"
-            "<p>Версия 2.0 с автосохранением</p>")
+        """Информация о программе"""
+        about_text = """
+        <h3>Текстовый редактор с языковым процессором</h3>
+        <p><b>Версия:</b> 2.0</p>
+        <p><b>Автор:</b> Студентка 3 курса</p>
+        <p><b>Год:</b> 2025</p>
+        <p>Вариант 72: Объявление перечисления на языке F#</p>
+        """
+        
+        row = self.output_table.rowCount()
+        self.output_table.insertRow(row)
+        self.output_table.setItem(row, 0, QTableWidgetItem("О ПРОГРАММЕ"))
+        self.output_table.setItem(row, 1, QTableWidgetItem(""))
+        self.output_table.setItem(row, 2, QTableWidgetItem("Информация о программе"))
+        self.output_table.setItem(row, 3, QTableWidgetItem(datetime.now().strftime("%H:%M:%S")))
+        
+        QMessageBox.about(self, "О программе", about_text)
 
 
 if __name__ == "__main__":
