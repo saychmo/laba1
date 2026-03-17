@@ -162,7 +162,7 @@ WHITESPACE	6	Пробельные символы	        пробел, табу�
 Пример 1:
 Входные данные:
 type Status = | Active | Inactive | Pending;
-Выходные даныне:
+Выходные даныне:![Пример_1](https://github.com/saychmo/laba1/blob/main/%D0%BF%D1%80%D0%B8%D0%BC%D0%B5%D1%801.png?raw=true)
 
 Пример 2:
 Входные данные:
@@ -174,7 +174,7 @@ type Day =
     | Friday
     | Saturday
     | Sunday;
-Выходные данные:
+Выходные данные:![Пример_2](https://github.com/saychmo/laba1/blob/main/%D0%BF%D1%80%D0%B8%D0%BC%D0%B5%D1%802.png?raw=true)
 
 Пример 3:
 Входные данные:
@@ -186,4 +186,4 @@ type Day =
     | Friday
     | Saturday
     | Sunday;
-Выходные данные:
+Выходные данные:![Пример_3](https://github.com/saychmo/laba1/blob/main/%D0%BF%D1%80%D0%B8%D0%BC%D0%B5%D1%803.png?raw=true)
