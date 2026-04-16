@@ -1,27 +1,44 @@
 import sys
 import os
+import re  # ДОБАВИТЬ
 from datetime import datetime
 from PyQt6 import QtCore
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QTextEdit, QVBoxLayout, QWidget,
     QToolBar, QStatusBar, QMessageBox, QFileDialog,
-    QSplitter, QTableWidget, QTableWidgetItem  
+    QSplitter, QTableWidget, QTableWidgetItem, QHBoxLayout,
+    QComboBox, QPushButton, QLabel, QGroupBox, QHeaderView,
+    QStyle, QLineEdit  # ДОБАВИТЬ QLineEdit
 )
-from PyQt6.QtGui import QAction, QCloseEvent, QTextCursor, QFont, QKeySequence
+from PyQt6.QtGui import QAction, QCloseEvent, QTextCursor, QFont, QKeySequence, QTextCharFormat, QColor
 from PyQt6.QtCore import Qt
 from typing import Optional
-from PyQt6.QtWidgets import QStyle
-from PyQt6.QtCore import Qt
+
 from scanner import analyze_text, TokenType
+from parser import Parser, EnumDeclarationNode
+from searcher import QuoteSearcher, QuoteMatch, SearchType  # ДОБАВИТЬ SearchType
 
 
 class TextEditor(QMainWindow):
     def __init__(self):
         super().__init__()
         self.current_file = None
-        self.is_modified = False  
+        self.is_modified = False
+        self.searcher = QuoteSearcher()
+        self.current_matches = []
+        self.current_highlighted_match = None
+        self._updating = False  # ДОБАВИТЬ флаг защиты от рекурсии
+        
+        # Инициализируем атрибуты для таблиц
+        self.output_table = None
+        self.results_table = None
+        
         self.init_ui()
         self.connect_signals()
+
+    def connect_signals(self):
+        """Подключение сигналов"""
+        self.editor.textChanged.connect(self.on_text_changed)
 
     def init_ui(self):
         """Инициализация интерфейса"""
@@ -33,22 +50,60 @@ class TextEditor(QMainWindow):
 
         main_layout = QVBoxLayout(central_widget)
 
-        splitter = QSplitter(Qt.Orientation.Vertical)
-
+        # Создаем вертикальный сплиттер
+        main_splitter = QSplitter(Qt.Orientation.Vertical)
+        
+        # Верхняя часть: редактор и панель поиска
+        top_widget = QWidget()
+        top_layout = QVBoxLayout(top_widget)
+        top_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Панель поиска (ОБНОВЛЕНА)
+        search_panel = self.create_search_panel()
+        top_layout.addWidget(search_panel)
+        
+        # Редактор текста
         self.editor = QTextEdit()
         self.editor.setFont(QFont("Courier New", 11))
-        splitter.addWidget(self.editor)
-
+        top_layout.addWidget(self.editor)
+        
+        main_splitter.addWidget(top_widget)
+        
+        # Нижняя часть: таблица результатов поиска (ОБНОВЛЕНА)
+        self.results_table = QTableWidget()
+        self.results_table.setColumnCount(3)  # ИЗМЕНЕНО: 3 колонки вместо 4
+        self.results_table.setHorizontalHeaderLabels([
+            "Найденная подстрока", 
+            "Начальная позиция", 
+            "Длина"
+        ])
+        self.results_table.setAlternatingRowColors(True)
+        self.results_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.results_table.cellClicked.connect(self.on_result_clicked)
+        self.results_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.results_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.results_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        
+        main_splitter.addWidget(self.results_table)
+        
+        # Создаем третий виджет для таблицы вывода парсера
+        bottom_widget = QWidget()
+        bottom_layout = QVBoxLayout(bottom_widget)
+        bottom_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Таблица для вывода результатов парсинга
         self.output_table = QTableWidget()
         self.output_table.setColumnCount(4)
         self.output_table.setHorizontalHeaderLabels(["Код", "Тип лексемы", "Лексема", "Местоположение"])
         self.output_table.setAlternatingRowColors(True)
-        self.output_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers) 
+        self.output_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.output_table.cellClicked.connect(self.on_error_clicked)
-        splitter.addWidget(self.output_table)
-
-        splitter.setSizes([600, 200])
-        main_layout.addWidget(splitter)
+        bottom_layout.addWidget(self.output_table)
+        
+        main_splitter.addWidget(bottom_widget)
+        
+        main_splitter.setSizes([500, 150, 150])
+        main_layout.addWidget(main_splitter)
 
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
@@ -58,59 +113,298 @@ class TextEditor(QMainWindow):
         self.create_toolbar()
         self.update_window_title()
 
-    def run_parser_table(self):
-        """Запуск лексического анализатора с выводом в таблицу"""
-        text = self.editor.toPlainText()
+    def create_search_panel(self) -> QGroupBox:
+        """Создание панели поиска с выбором типа"""
+        search_group = QGroupBox("Поиск подстрок")
+        layout = QHBoxLayout()
         
-        if not text.strip():
-            QMessageBox.warning(self, "Предупреждение", "Введите текст для анализа")
+        # Метка
+        self.search_label = QLabel("Тип поиска:")
+        layout.addWidget(self.search_label)
+        
+        # ВЫПАДАЮЩИЙ СПИСОК ДЛЯ ВЫБОРА ТИПА ПОИСКА
+        self.search_type_combo = QComboBox()
+        search_types = self.searcher.get_search_types_list()
+        for search_type, type_name in search_types:
+            self.search_type_combo.addItem(type_name, search_type)
+        self.search_type_combo.setMinimumWidth(250)
+        self.search_type_combo.currentIndexChanged.connect(self.on_search_type_changed)
+        layout.addWidget(self.search_type_combo)
+        
+        # Поле для пользовательского шаблона (изначально скрыто)
+        self.custom_pattern_edit = QLineEdit()
+        self.custom_pattern_edit.setPlaceholderText("Введите регулярное выражение...")
+        self.custom_pattern_edit.setVisible(False)
+        self.custom_pattern_edit.setMinimumWidth(200)
+        layout.addWidget(self.custom_pattern_edit)
+        
+        # Кнопка применения пользовательского шаблона
+        self.apply_custom_btn = QPushButton("Применить")
+        self.apply_custom_btn.setVisible(False)
+        self.apply_custom_btn.clicked.connect(self.apply_custom_pattern)
+        layout.addWidget(self.apply_custom_btn)
+        
+        # Кнопка запуска поиска
+        self.search_button = QPushButton("Найти")
+        self.search_button.clicked.connect(self.search_quotes)
+        self.search_button.setMinimumWidth(80)
+        layout.addWidget(self.search_button)
+        
+        # Кнопка очистки результатов
+        self.clear_button = QPushButton("Очистить")
+        self.clear_button.clicked.connect(self.clear_results)
+        layout.addWidget(self.clear_button)
+        
+        # Метка для отображения количества найденных совпадений
+        self.count_label = QLabel("Найдено: 0")
+        self.count_label.setStyleSheet("QLabel { font-weight: bold; color: #2c3e50; }")
+        layout.addWidget(self.count_label)
+        
+        layout.addStretch()
+        search_group.setLayout(layout)
+        
+        return search_group
+
+    def on_search_type_changed(self, index: int):
+        """Обработчик изменения типа поиска"""
+        search_type = self.search_type_combo.currentData()
+        
+        # Показываем поле для пользовательского шаблона только при выборе CUSTOM
+        is_custom = (search_type == SearchType.CUSTOM)
+        self.custom_pattern_edit.setVisible(is_custom)
+        self.apply_custom_btn.setVisible(is_custom)
+        
+        # Устанавливаем тип поиска в searcher
+        self.searcher.set_search_type(search_type)
+        
+        # Если не пользовательский шаблон, очищаем поле
+        if not is_custom:
+            self.custom_pattern_edit.clear()
+        
+        # Обновляем статус
+        if is_custom:
+            self.custom_pattern_edit.setFocus()
+            self.status_bar.showMessage("Введите регулярное выражение и нажмите 'Применить'")
+        else:
+            self.status_bar.showMessage(f"Выбран тип поиска: {self.search_type_combo.currentText()}")
+
+    def apply_custom_pattern(self):
+        """Применение пользовательского шаблона"""
+        pattern = self.custom_pattern_edit.text().strip()
+        
+        if not pattern:
+            QMessageBox.warning(self, "Предупреждение", "Введите регулярное выражение")
+            return
+        
+        # Проверяем корректность шаблона
+        if self.searcher.validate_pattern(pattern):
+            self.searcher.set_custom_pattern(pattern)
+            self.status_bar.showMessage(f"Пользовательский шаблон применен: {pattern}")
+            QMessageBox.information(self, "Успешно", "Пользовательский шаблон успешно применен")
+        else:
+            QMessageBox.critical(self, "Ошибка", f"Неверное регулярное выражение:\n{pattern}")
+
+    def search_quotes(self):
+        """Поиск подстрок в тексте с учетом выбранного типа"""
+        if self._updating:
+            return
+        
+        self._updating = True
+        
+        try:
+            text = self.editor.toPlainText()
+            
+            if not text.strip():
+                QMessageBox.warning(self, "Предупреждение", "Введите текст для поиска")
+                return
+            
+            # Для пользовательского шаблона проверяем, что он установлен
+            if self.search_type_combo.currentData() == SearchType.CUSTOM:
+                pattern = self.searcher.get_pattern()
+                if not pattern:
+                    QMessageBox.warning(self, "Предупреление", 
+                        "Сначала введите и примените пользовательский шаблон")
+                    return
+            
+            # Выполняем поиск
+            self.current_matches = self.searcher.find_matches(text)
+            
+            # Очищаем таблицу
+            self.results_table.setRowCount(0)
+            
+            if not self.current_matches:
+                self.count_label.setText("Найдено: 0")
+                QMessageBox.information(self, "Результаты поиска", "Совпадения не найдены")
+                self.status_bar.showMessage("Совпадения не найдены")
+                return
+            
+            # Заполняем таблицу результатов
+            for row, match in enumerate(self.current_matches):
+                self.results_table.insertRow(row)
+                
+                # Найденная подстрока
+                self.results_table.setItem(row, 0, QTableWidgetItem(match.text))
+                # Начальная позиция (номер строки, номер символа)
+                position_text = f"строка {match.line}, символ {match.start_pos}"
+                self.results_table.setItem(row, 1, QTableWidgetItem(position_text))
+                # Длина
+                self.results_table.setItem(row, 2, QTableWidgetItem(str(match.length)))
+            
+            # Обновляем счетчик
+            self.count_label.setText(f"Найдено: {len(self.current_matches)}")
+            
+            # Добавляем запись в лог
+            if self.output_table:
+                row = self.output_table.rowCount()
+                self.output_table.insertRow(row)
+                self.output_table.setItem(row, 0, QTableWidgetItem("ПОИСК"))
+                self.output_table.setItem(row, 1, QTableWidgetItem("Информация"))
+                self.output_table.setItem(row, 2, QTableWidgetItem(
+                    f"Найдено совпадений: {len(self.current_matches)} (тип: {self.search_type_combo.currentText()})"
+                ))
+                self.output_table.setItem(row, 3, QTableWidgetItem(datetime.now().strftime("%H:%M:%S")))
+            
+            self.status_bar.showMessage(f"Найдено совпадений: {len(self.current_matches)}")
+            
+        except ValueError as e:
+            QMessageBox.critical(self, "Ошибка регулярного выражения", str(e))
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Ошибка при поиске:\n{str(e)}")
+        finally:
+            self._updating = False
+    
+    def clear_results(self):
+        """Очистка результатов поиска"""
+        if self._updating:
+            return
+        
+        self._updating = True
+        
+        try:
+            self.results_table.setRowCount(0)
+            self.current_matches = []
+            self.count_label.setText("Найдено: 0")
+            self.clear_highlight()
+            self.status_bar.showMessage("Результаты поиска очищены")
+            
+            # Добавляем запись в лог
+            if self.output_table:
+                row = self.output_table.rowCount()
+                self.output_table.insertRow(row)
+                self.output_table.setItem(row, 0, QTableWidgetItem("ПОИСК"))
+                self.output_table.setItem(row, 1, QTableWidgetItem("Информация"))
+                self.output_table.setItem(row, 2, QTableWidgetItem("Результаты поиска очищены"))
+                self.output_table.setItem(row, 3, QTableWidgetItem(datetime.now().strftime("%H:%M:%S")))
+        finally:
+            self._updating = False
+    
+    def on_result_clicked(self, row: int, column: int):
+        """Обработчик клика по строке в таблице результатов"""
+        if self._updating:
             return
         
         try:
-            tokens, errors = analyze_text(text)
-            self.output_table.setRowCount(0)
-            valid_tokens = [t for t in tokens if t.type != TokenType.WHITESPACE]
-            self.output_table.setRowCount(len(valid_tokens))
+            if row >= len(self.current_matches):
+                return
             
-            for row, token in enumerate(valid_tokens):
-                self.output_table.setItem(row, 0, QTableWidgetItem(str(token.code)))
-                type_name = {
-                    TokenType.KEYWORD: "Ключевое слово",
-                    TokenType.IDENTIFIER: "Идентификатор",
-                    TokenType.OPERATOR: "Оператор",
-                    TokenType.PIPE: "Разделитель |",
-                    TokenType.SEPARATOR: "Разделитель ;",
-                    TokenType.ERROR: "ОШИБКА"
-                }.get(token.type, token.type.name)
-                self.output_table.setItem(row, 1, QTableWidgetItem(type_name))
-                self.output_table.setItem(row, 2, QTableWidgetItem(token.value))
-                pos = f"{token.line}:{token.start_pos}-{token.end_pos}"
-                self.output_table.setItem(row, 3, QTableWidgetItem(pos))
-
-            self.output_table.resizeColumnsToContents()
+            match = self.current_matches[row]
+            self.highlight_quote(match)
             
-            if errors:
-                error_msg = "\n".join([f"❌ '{e.value}' в строке {e.line}, позиция {e.start_pos}" for e in errors])
-                QMessageBox.warning(self, "Ошибки анализа", f"Обнаружено {len(errors)} ошибок:\n{error_msg}")
-            else:
-                QMessageBox.information(self, "Анализ завершен", f"Успешно распознано {len(valid_tokens)} лексем")
+            # Добавляем запись в лог
+            if self.output_table:
+                row_idx = self.output_table.rowCount()
+                self.output_table.insertRow(row_idx)
+                self.output_table.setItem(row_idx, 0, QTableWidgetItem("ПОИСК"))
+                self.output_table.setItem(row_idx, 1, QTableWidgetItem("Навигация"))
+                self.output_table.setItem(row_idx, 2, QTableWidgetItem(
+                    f"Выбрана подстрока: {match.text} (строка {match.line}, символ {match.start_pos})"
+                ))
+                self.output_table.setItem(row_idx, 3, QTableWidgetItem(datetime.now().strftime("%H:%M:%S")))
             
-            self.status_bar.showMessage(f"Анализ завершен: {len(valid_tokens)} лексем, {len(errors)} ошибок")
+            self.status_bar.showMessage(f"Выделена подстрока: {match.text}")
             
         except Exception as e:
-            QMessageBox.critical(self, "Ошибка", f"Ошибка при анализе:\n{str(e)}")
-
-    def connect_signals(self):
-        """Подключение сигналов для отслеживания изменений"""
-        self.editor.textChanged.connect(self.on_text_changed)
-
+            print(f"Ошибка при выборе результата: {e}")
+    
+    def highlight_quote(self, match: QuoteMatch):
+        """Подсвечивает подстроку в редакторе"""
+        if self._updating:
+            return
+        
+        self._updating = True
+        
+        try:
+            # Сохраняем текущий курсор
+            cursor = self.editor.textCursor()
+            
+            # Устанавливаем позицию курсора на начало подстроки
+            cursor.setPosition(match.absolute_pos)
+            
+            # Выделяем текст подстроки
+            cursor.setPosition(match.absolute_pos + match.length, QTextCursor.MoveMode.KeepAnchor)
+            
+            # Устанавливаем формат выделения
+            format = QTextCharFormat()
+            format.setBackground(QColor(255, 255, 0, 100))  # Полупрозрачный желтый фон
+            format.setForeground(QColor(0, 0, 0))  # Черный текст
+            
+            cursor.mergeCharFormat(format)
+            
+            # Устанавливаем курсор и прокручиваем к выделенному тексту
+            self.editor.setTextCursor(cursor)
+            self.editor.ensureCursorVisible()
+            
+            # Запоминаем текущее выделенное совпадение
+            self.current_highlighted_match = match
+        finally:
+            self._updating = False
+    
+    def clear_highlight(self):
+        """Очищает подсветку всех подстрок"""
+        if self._updating:
+            return
+        
+        self._updating = True
+        
+        try:
+            # Создаем курсор для всего текста
+            cursor = self.editor.textCursor()
+            cursor.select(QTextCursor.SelectionType.Document)
+            
+            # Сбрасываем формат для всего текста
+            format = QTextCharFormat()
+            format.setBackground(QColor(255, 255, 255))  # Белый фон
+            format.setForeground(QColor(0, 0, 0))  # Черный текст
+            
+            cursor.mergeCharFormat(format)
+            
+            # Сбрасываем текущее выделение
+            cursor.clearSelection()
+            self.editor.setTextCursor(cursor)
+            
+            self.current_highlighted_match = None
+        finally:
+            self._updating = False
+    
     def on_text_changed(self):
         """Обработчик изменения текста"""
-        if not self.is_modified:
-            self.is_modified = True
-            self.update_window_title()
-            self.status_bar.showMessage("✎ Изменено")
-
+        if self._updating:
+            return
+        
+        self._updating = True
+        
+        try:
+            if not self.is_modified:
+                self.is_modified = True
+                self.update_window_title()
+                self.status_bar.showMessage("✎ Изменено")
+            
+            # При изменении текста очищаем подсветку
+            self.clear_highlight()
+        finally:
+            self._updating = False
+    
+    # Остальные методы остаются без изменений
     def update_window_title(self):
         """Обновление заголовка окна с учетом статуса изменений"""
         if self.current_file:
@@ -173,7 +467,6 @@ class TextEditor(QMainWindow):
             
             pos_text = pos_item.text()
             print(f"Нажата ошибка: позиция '{pos_text}'")
-            self.debug_line_count()
             
             if ':' in pos_text:
                 parts = pos_text.split(':')
@@ -267,6 +560,9 @@ class TextEditor(QMainWindow):
         self.current_file = None
         self.is_modified = False
         self.update_window_title()
+        
+        # Очищаем результаты поиска
+        self.clear_results()
     
         row = self.output_table.rowCount()
         self.output_table.insertRow(row)
@@ -296,6 +592,10 @@ class TextEditor(QMainWindow):
                 self.current_file = file_path
                 self.is_modified = False
                 self.update_window_title()
+                
+                # Очищаем результаты поиска
+                self.clear_results()
+                
                 row = self.output_table.rowCount()
                 self.output_table.insertRow(row)
                 self.output_table.setItem(row, 0, QTableWidgetItem("СИСТ"))
@@ -396,7 +696,7 @@ class TextEditor(QMainWindow):
         
         exit_action = QAction("Выход", self)
         exit_action.setShortcut(QKeySequence.StandardKey.Quit)
-        exit_action.triggered.connect(self.close)  # close вызовет closeEvent
+        exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
 
         edit_menu = menubar.addMenu("Правка")
@@ -440,6 +740,25 @@ class TextEditor(QMainWindow):
         select_all_action.triggered.connect(self.editor.selectAll)
         edit_menu.addAction(select_all_action)
 
+        # Добавляем меню поиска
+        search_menu = menubar.addMenu("Поиск")
+        
+        search_action = QAction("Найти цитаты", self)
+        search_action.setShortcut(QKeySequence("Ctrl+F"))
+        search_action.triggered.connect(self.search_quotes)
+        search_menu.addAction(search_action)
+        
+        clear_action = QAction("Очистить результаты", self)
+        clear_action.setShortcut(QKeySequence("Ctrl+Shift+F"))
+        clear_action.triggered.connect(self.clear_results)
+        search_menu.addAction(clear_action)
+        
+        search_menu.addSeparator()
+        
+        count_action = QAction("Показать количество цитат", self)
+        count_action.triggered.connect(self.show_quote_count)
+        search_menu.addAction(count_action)
+
         text_menu = menubar.addMenu("Текст")
         text_menu.addAction("Постановка задачи", lambda: self.show_info("Постановка задачи"))
         text_menu.addAction("Грамматика", lambda: self.show_info("Грамматика"))
@@ -463,10 +782,16 @@ class TextEditor(QMainWindow):
         about_action.triggered.connect(self.show_about)
         help_menu.addAction(about_action)
 
+    def show_quote_count(self):
+        """Показать количество цитат в текущем тексте"""
+        text = self.editor.toPlainText()
+        count = self.searcher.get_match_count(text)
+        QMessageBox.information(self, "Количество цитат", f"В тексте найдено цитат: {count}")
+
     def create_toolbar(self):
         """Создание панели инструментов с иконками"""
         toolbar = QToolBar("Панель инструментов")
-        toolbar.setIconSize(QtCore.QSize(24, 24))  # Размер иконок
+        toolbar.setIconSize(QtCore.QSize(24, 24))
         self.addToolBar(toolbar)
 
         new_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
@@ -523,6 +848,15 @@ class TextEditor(QMainWindow):
     
         toolbar.addSeparator()
 
+        # Добавляем кнопку поиска на панель инструментов
+        search_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogContentsView)
+        search_action = QAction(search_icon, "Поиск цитат", self)
+        search_action.setShortcut(QKeySequence("Ctrl+F"))
+        search_action.triggered.connect(self.search_quotes)
+        toolbar.addAction(search_action)
+
+        toolbar.addSeparator()
+
         run_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay)
         run_action = QAction(run_icon, "Запуск анализа", self)
         run_action.triggered.connect(self.run_parser)
@@ -553,7 +887,7 @@ class TextEditor(QMainWindow):
         self.output_table.setItem(row, 3, QTableWidgetItem(datetime.now().strftime("%H:%M:%S")))
 
     def run_parser(self):
-        """Запуск лексического анализатора"""
+        """Запуск лексического и синтаксического анализатора"""
         text = self.editor.toPlainText()
         
         if not text.strip():
@@ -561,71 +895,112 @@ class TextEditor(QMainWindow):
             return
         
         try:
-            tokens, error_messages = analyze_text(text)
+            # 1. ЛЕКСИЧЕСКИЙ АНАЛИЗ
+            tokens, lex_errors = analyze_text(text)
             
+            # 2. СИНТАКСИЧЕСКИЙ АНАЛИЗ
+            parser = Parser(tokens)
+            ast, syntax_errors = parser.parse()
+            
+            # 3. ОЧИЩАЕМ ТАБЛИЦУ
             self.output_table.setRowCount(0)
             
+            # 4. ВЫВОДИМ ЗАГОЛОВОК
             row = self.output_table.rowCount()
             self.output_table.insertRow(row)
-            self.output_table.setItem(row, 0, QTableWidgetItem("Код"))
-            self.output_table.setItem(row, 1, QTableWidgetItem("Тип"))
-            self.output_table.setItem(row, 2, QTableWidgetItem("Лексема"))
-            self.output_table.setItem(row, 3, QTableWidgetItem("Позиция"))
+            self.output_table.setItem(row, 0, QTableWidgetItem("==="))
+            self.output_table.setItem(row, 1, QTableWidgetItem("РЕЗУЛЬТАТЫ АНАЛИЗА"))
+            self.output_table.setItem(row, 2, QTableWidgetItem(""))
+            self.output_table.setItem(row, 3, QTableWidgetItem(""))
             
-            current_line = 1
-            line_tokens = []
+            # 5. ВЫВОДИМ ЛЕКСЕМЫ
+            row = self.output_table.rowCount()
+            self.output_table.insertRow(row)
+            self.output_table.setItem(row, 0, QTableWidgetItem("ЛЕКСЕМЫ"))
+            self.output_table.setItem(row, 1, QTableWidgetItem(""))
+            self.output_table.setItem(row, 2, QTableWidgetItem(""))
+            self.output_table.setItem(row, 3, QTableWidgetItem(""))
             
             valid_tokens = [t for t in tokens if t.type != TokenType.WHITESPACE]
-            
             for token in valid_tokens:
                 row = self.output_table.rowCount()
                 self.output_table.insertRow(row)
-
-                code_item = QTableWidgetItem(str(token.code))
-                self.output_table.setItem(row, 0, code_item)
                 
                 type_name = {
-                    TokenType.KEYWORD: "Ключевое слово",
-                    TokenType.IDENTIFIER: "Идентификатор",
-                    TokenType.OPERATOR: "Оператор",
-                    TokenType.PIPE: "Разделитель |",
-                    TokenType.SEPARATOR: "Разделитель ;",
-                    TokenType.ERROR: "ОШИБКА"
-                }.get(token.type, token.type.name)
-                type_item = QTableWidgetItem(type_name)
-                self.output_table.setItem(row, 1, type_item)
+                    TokenType.KEYWORD: "KEYWORD",
+                    TokenType.IDENTIFIER: "IDENTIFIER",
+                    TokenType.OPERATOR: "OPERATOR",
+                    TokenType.PIPE: "PIPE",
+                    TokenType.SEPARATOR: "SEPARATOR",
+                    TokenType.ERROR: "ERROR"
+                }.get(token.type, str(token.type))
                 
-                value_item = QTableWidgetItem(token.value)
-                self.output_table.setItem(row, 2, value_item)
-
-                pos_text = f"{token.line}:{token.start_pos}-{token.end_pos}"
-                pos_item = QTableWidgetItem(pos_text)
-                self.output_table.setItem(row, 3, pos_item)
-                
-                if token.type == TokenType.ERROR:
-                    for col in range(4):
-                        item = self.output_table.item(row, col)
-                        if item:
-                            item.setBackground(Qt.GlobalColor.red)
-                            item.setForeground(Qt.GlobalColor.white)
+                self.output_table.setItem(row, 0, QTableWidgetItem(str(token.code)))
+                self.output_table.setItem(row, 1, QTableWidgetItem(type_name))
+                self.output_table.setItem(row, 2, QTableWidgetItem(token.value))
+                self.output_table.setItem(row, 3, QTableWidgetItem(f"{token.line}:{token.start_pos}"))
             
+            # 6. ВЫВОДИМ AST
             row = self.output_table.rowCount()
             self.output_table.insertRow(row)
-            self.output_table.setItem(row, 0, QTableWidgetItem("---"))
-
-            row = self.output_table.rowCount()
-            self.output_table.insertRow(row)
-            error_count = len([t for t in valid_tokens if t.type == TokenType.ERROR])
-            self.output_table.setItem(row, 2, QTableWidgetItem(f"Всего лексем: {len(valid_tokens)}, Ошибок: {error_count}"))
+            self.output_table.setItem(row, 0, QTableWidgetItem("AST"))
+            self.output_table.setItem(row, 1, QTableWidgetItem(""))
+            self.output_table.setItem(row, 2, QTableWidgetItem(""))
+            self.output_table.setItem(row, 3, QTableWidgetItem(""))
+            
+            if ast:
+                row = self.output_table.rowCount()
+                self.output_table.insertRow(row)
+                self.output_table.setItem(row, 0, QTableWidgetItem("├─"))
+                self.output_table.setItem(row, 1, QTableWidgetItem("EnumDeclaration"))
+                self.output_table.setItem(row, 2, QTableWidgetItem(f"type_name: {ast.type_name}"))
+                self.output_table.setItem(row, 3, QTableWidgetItem(""))
+                
+                for i, case in enumerate(ast.cases):
+                    row = self.output_table.rowCount()
+                    self.output_table.insertRow(row)
+                    prefix = "└─" if i == len(ast.cases) - 1 else "├─"
+                    self.output_table.setItem(row, 0, QTableWidgetItem(f"  {prefix}"))
+                    self.output_table.setItem(row, 1, QTableWidgetItem("Case"))
+                    self.output_table.setItem(row, 2, QTableWidgetItem(case.name))
+                    self.output_table.setItem(row, 3, QTableWidgetItem(""))
+            else:
+                row = self.output_table.rowCount()
+                self.output_table.insertRow(row)
+                self.output_table.setItem(row, 1, QTableWidgetItem("AST построить не удалось"))
+            
+            # 7. ВЫВОДИМ ОШИБКИ
+            all_errors = lex_errors + syntax_errors
+            
+            if all_errors:
+                row = self.output_table.rowCount()
+                self.output_table.insertRow(row)
+                self.output_table.setItem(row, 0, QTableWidgetItem("ОШИБКИ"))
+                self.output_table.setItem(row, 1, QTableWidgetItem(""))
+                self.output_table.setItem(row, 2, QTableWidgetItem(""))
+                self.output_table.setItem(row, 3, QTableWidgetItem(""))
+                
+                for error in all_errors:
+                    row = self.output_table.rowCount()
+                    self.output_table.insertRow(row)
+                    self.output_table.setItem(row, 0, QTableWidgetItem("❌"))
+                    self.output_table.setItem(row, 1, QTableWidgetItem(""))
+                    self.output_table.setItem(row, 2, QTableWidgetItem(error))
+                    self.output_table.setItem(row, 3, QTableWidgetItem(""))
+                
+                QMessageBox.warning(self, "Ошибки анализа", f"Обнаружено {len(all_errors)} ошибок")
+                self.status_bar.showMessage(f"Анализ завершен с ошибками: {len(all_errors)}")
+            else:
+                row = self.output_table.rowCount()
+                self.output_table.insertRow(row)
+                self.output_table.setItem(row, 1, QTableWidgetItem("✅ Анализ выполнен успешно"))
+                
+                QMessageBox.information(self, "Анализ завершен", 
+                    f"Успешно распознано {len(valid_tokens)} лексем\n"
+                    f"Построено AST: тип={ast.type_name}, вариантов={len(ast.cases)}")
+                self.status_bar.showMessage(f"Анализ завершен: {len(valid_tokens)} лексем, ошибок нет")
             
             self.output_table.resizeColumnsToContents()
-            
-            if error_count > 0:
-                QMessageBox.warning(self, "Ошибки анализа", f"Обнаружено {error_count} ошибок")
-                self.status_bar.showMessage(f"Анализ завершен: {len(valid_tokens)} лексем, {error_count} ошибок")
-            else:
-                QMessageBox.information(self, "Анализ завершен", f"Успешно распознано {len(valid_tokens)} лексем")
-                self.status_bar.showMessage(f"Анализ завершен: {len(valid_tokens)} лексем, ошибок нет")
             
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Ошибка при анализе:\n{str(e)}")
@@ -637,14 +1012,40 @@ class TextEditor(QMainWindow):
         
         Файл: Создание, открытие, сохранение файлов
         Правка: Редактирование текста
+        Поиск: Поиск подстрок с поддержкой различных типов:
+            
+        1. Цитаты:
+        - В одинарных кавычках: 'текст'
+        - В двойных кавычках: "текст"
+        - Любые кавычки
+    
+        2. Комментарии C++:
+        - Однострочные: // текст комментария
+        - Многострочные: /* текст комментария */
+        - Все комментарии вместе
+    
+        3. MAC-адреса:
+        - С разделителями (: или -): 00:1A:2B:3C:4D:5E
+        - Без разделителей: 001A2B3C4D5E
+        - С точками: 001A.2B3C.4D5E
+        - Все форматы вместе
+    
+        4. Слова с заглавной буквы: Пример Слово
+    
+        5. Числа: 123, 45.67
+    
+        6. Пользовательский шаблон: любое регулярное выражение
+    
         Текст: Информация о лабораторной работе
-        Пуск: Запуск лексического анализатора
+        Пуск: Запуск лексического и синтаксического анализатора
         Справка: Информация о программе
         
         Горячие клавиши:
         Ctrl+N - Создать
         Ctrl+O - Открыть
         Ctrl+S - Сохранить
+        Ctrl+F - Найти цитаты
+        Ctrl+Shift+F - Очистить результаты поиска
         Ctrl+Z - Отменить
         Ctrl+Y - Повторить
         Ctrl+X - Вырезать
@@ -666,10 +1067,11 @@ class TextEditor(QMainWindow):
         """Информация о программе"""
         about_text = """
         <h3>Текстовый редактор с языковым процессором</h3>
-        <p><b>Версия:</b> 2.0</p>
+        <p><b>Версия:</b> 3.0</p>
         <p><b>Автор:</b> Студентка 3 курса</p>
         <p><b>Год:</b> 2025</p>
         <p>Вариант 72: Объявление перечисления на языке F#</p>
+        <p><b>Дополнительно:</b> Поиск цитат в одинарных кавычках</p>
         """
         
         row = self.output_table.rowCount()
