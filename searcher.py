@@ -4,7 +4,8 @@
 import re
 from typing import List, Tuple, Optional, Callable
 from enum import Enum
-
+from automaton_searcher import AutomatonSearcher, AutomatonMatch, AutomatonVisualizer
+from typing import Dict
 
 class SearchType(Enum):
     """Типы поиска"""
@@ -20,6 +21,7 @@ class SearchType(Enum):
     MAC_ADDRESS_COMPACT = "MAC-адреса без разделителей (XXXXXXXXXXXX)"
     MAC_ADDRESS_ALL = "MAC-адреса (с разделителями и без)"
     CUSTOM = "Пользовательский шаблон"
+    AUTOMATON_QUOTES = "Автоматный поиск цитат (конечный автомат)"
 
 
 class QuoteMatch:
@@ -62,6 +64,7 @@ class QuoteSearcher:
         self.custom_pattern = ""
         self.last_pattern = None
         self.last_compiled_pattern = None
+        self.automaton_searcher = AutomatonSearcher()
     
     def _get_mac_pattern_with_delimiters(self) -> str:
         """
@@ -252,3 +255,35 @@ class QuoteSearcher:
                 text[match.absolute_pos:match.absolute_pos + match.length] + 
                 highlight_end + 
                 text[match.absolute_pos + match.length:])
+    
+        
+    def find_matches_automaton(self, text: str) -> List[QuoteMatch]:
+        """
+        Поиск цитат с использованием конечного автомата
+        """
+        if not text:
+            return []
+        
+        automaton_matches = self.automaton_searcher.find_matches(text)
+        
+        # Конвертируем AutomatonMatch в QuoteMatch для совместимости
+        quotes = []
+        for match in automaton_matches:
+            quotes.append(QuoteMatch(
+                text=match.text,
+                line=match.start_line,
+                start_pos=match.start_pos,
+                end_pos=match.start_pos + match.length - 1,
+                absolute_pos=match.absolute_start
+            ))
+        
+        return quotes
+    
+    def trace_automaton_search(self, text: str) -> List[Dict]:
+        """Возвращает трассировку работы автомата"""
+        return AutomatonVisualizer.trace_search(text, self.automaton_searcher)
+    
+    def print_automaton_trace(self, text: str):
+        """Выводит трассировку в консоль"""
+        trace = self.trace_automaton_search(text)
+        AutomatonVisualizer.print_trace(trace)

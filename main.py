@@ -150,6 +150,20 @@ class TextEditor(QMainWindow):
         self.search_button.setMinimumWidth(80)
         layout.addWidget(self.search_button)
         
+        # Кнопка автоматного поиска
+        self.automaton_button = QPushButton("Автоматный поиск")
+        self.automaton_button.clicked.connect(self.search_quotes_automaton)
+        self.automaton_button.setMinimumWidth(120)
+        self.automaton_button.setToolTip("Поиск цитат с использованием конечного автомата (только для одинарных кавычек)")
+        layout.addWidget(self.automaton_button)
+    
+        # Кнопка трассировки автомата
+        self.trace_button = QPushButton("Трассировка")
+        self.trace_button.clicked.connect(self.show_automaton_trace)
+        self.trace_button.setMinimumWidth(100)
+        self.trace_button.setToolTip("Показать трассировку работы конечного автомата (пошаговый разбор)")
+        layout.addWidget(self.trace_button)
+
         # Кнопка очистки результатов
         self.clear_button = QPushButton("Очистить")
         self.clear_button.clicked.connect(self.clear_results)
@@ -159,7 +173,9 @@ class TextEditor(QMainWindow):
         self.count_label = QLabel("Найдено: 0")
         self.count_label.setStyleSheet("QLabel { font-weight: bold; color: #2c3e50; }")
         layout.addWidget(self.count_label)
-        
+        self.info_label = QLabel("💡 Поддерживаются: комментарии C++, MAC-адреса, цитаты, числа, слова | 🔍 Автоматный поиск для 'цитат'")
+        self.info_label.setStyleSheet("QLabel { color: #7f8c8d; font-size: 10pt; }")
+        layout.addWidget(self.info_label)
         layout.addStretch()
         search_group.setLayout(layout)
         
@@ -1063,6 +1079,106 @@ class TextEditor(QMainWindow):
         
         QMessageBox.information(self, "Справка", help_text)
     
+    def search_quotes_automaton(self):
+        """Поиск цитат с использованием конечного автомата"""
+        if self._updating:
+            return
+    
+        self._updating = True
+    
+        try:
+            text = self.editor.toPlainText()
+        
+            if not text.strip():
+                QMessageBox.warning(self, "Предупреждение", "Введите текст для поиска")
+                return
+        
+        # Выполняем автоматный поиск
+            self.current_matches = self.searcher.find_matches_automaton(text)
+        
+        # Очищаем таблицу
+            self.results_table.setRowCount(0)
+        
+            if not self.current_matches:
+                self.count_label.setText("Найдено: 0")
+                QMessageBox.information(self, "Результаты поиска", "Цитаты не найдены")
+                self.status_bar.showMessage("Цитаты не найдены")
+                return
+        
+        # Заполняем таблицу результатов
+            for row, match in enumerate(self.current_matches):
+                self.results_table.insertRow(row)
+                self.results_table.setItem(row, 0, QTableWidgetItem(match.text))
+                position_text = f"строка {match.line}, символ {match.start_pos}"
+                self.results_table.setItem(row, 1, QTableWidgetItem(position_text))
+                self.results_table.setItem(row, 2, QTableWidgetItem(str(match.length)))
+        
+            self.count_label.setText(f"Найдено: {len(self.current_matches)}")
+        
+        # Логирование
+            if self.output_table:
+                row = self.output_table.rowCount()
+                self.output_table.insertRow(row)
+                self.output_table.setItem(row, 0, QTableWidgetItem("АВТОМАТ"))
+                self.output_table.setItem(row, 1, QTableWidgetItem("Конечный автомат"))
+                self.output_table.setItem(row, 2, QTableWidgetItem(
+                    f"Найдено цитат: {len(self.current_matches)}"
+                ))
+                self.output_table.setItem(row, 3, QTableWidgetItem(datetime.now().strftime("%H:%M:%S")))
+        
+            self.status_bar.showMessage(f"Автоматный поиск: найдено {len(self.current_matches)} цитат")
+        
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Ошибка при поиске:\n{str(e)}")
+        finally:
+            self._updating = False
+
+    def show_automaton_trace(self):
+        """Показать трассировку работы автомата"""
+        text = self.editor.toPlainText()
+    
+        if not text.strip():
+            QMessageBox.warning(self, "Предупреждение", "Введите текст для трассировки")
+            return
+    
+    # Получаем трассировку
+        trace = self.searcher.trace_automaton_search(text[:100])  # Ограничим 100 символами
+    
+    # Формируем текст для вывода
+        trace_text = "ТРАССИРОВКА РАБОТЫ АВТОМАТА\n"
+        trace_text += "="*60 + "\n"
+        trace_text += f"{'Поз.':<6} {'Символ':<8} {'Переход':<20} {'Событие'}\n"
+        trace_text += "-"*60 + "\n"
+    
+        for step in trace:
+            char = repr(step['char'])[1:-1] if step['char'] != '\n' else '\\n'
+            trans = f"{step['old_state']} → {step['new_state']}"
+            event = ""
+            if step['is_quote_start']:
+                event = "🔵 НАЧАЛО ЦИТАТЫ"
+            elif step['is_quote_end']:
+                event = "🟢 КОНЕЦ ЦИТАТЫ"
+        
+            trace_text += f"{step['position']:<6} {char:<8} {trans:<20} {event}\n"
+    
+        trace_text += "="*60 + "\n"
+    
+    # Выводим в таблицу
+        row = self.output_table.rowCount()
+        self.output_table.insertRow(row)
+        self.output_table.setItem(row, 0, QTableWidgetItem("ТРАССИРОВКА"))
+        self.output_table.setItem(row, 1, QTableWidgetItem("Автомат"))
+        self.output_table.setItem(row, 2, QTableWidgetItem(trace_text))
+        self.output_table.setItem(row, 3, QTableWidgetItem(datetime.now().strftime("%H:%M:%S")))
+    
+        QMessageBox.information(self, "Трассировка автомата", 
+            "Трассировка добавлена в таблицу результатов\n\n"
+            "Легенда:\n"
+            "🔵 - начало цитаты (открывающая кавычка)\n"
+            "🟢 - конец цитаты (закрывающая кавычка)\n"
+            "START → IN_QUOTE - переход в режим чтения цитаты\n"
+            "IN_QUOTE → QUOTE_END - завершение цитаты")
+
     def show_about(self):
         """Информация о программе"""
         about_text = """
