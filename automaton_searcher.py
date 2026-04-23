@@ -1,5 +1,5 @@
 # automaton_searcher.py
-# Модуль для поиска подстрок с использованием конечного автомата
+# Модуль для поиска комментариев C++ с использованием конечного автомата
 
 from typing import List, Dict, Tuple, Optional
 from dataclasses import dataclass
@@ -7,16 +7,18 @@ from enum import Enum
 
 
 class AutomatonState(Enum):
-    """Состояния автомата для поиска цитат в одинарных кавычках"""
-    START = 0           # Начальное состояние
-    IN_QUOTE = 1        # Внутри цитаты
-    ESCAPE = 2          # Встретили экранирующий символ \
-    QUOTE_END = 3       # Нашли закрывающую кавычку
+    """Состояния автомата для поиска комментариев C++"""
+    START = 0               # Начальное состояние
+    SLASH = 1               # Найден символ '/'
+    SINGLE_LINE = 2         # Внутри однострочного комментария //
+    MULTI_LINE = 3          # Внутри многострочного комментария /*
+    MULTI_LINE_STAR = 4     # Найден '*' внутри многострочного комментария
+    END_COMMENT = 5         # Конец комментария (сохранение)
 
 
 @dataclass
 class AutomatonMatch:
-    """Класс для хранения информации о найденной подстроке"""
+    """Класс для хранения информации о найденном комментарии"""
     text: str
     start_line: int
     start_pos: int
@@ -25,35 +27,32 @@ class AutomatonMatch:
     absolute_start: int
     absolute_end: int
     length: int
+    comment_type: str      # "single_line" или "multi_line"
     
     def __repr__(self):
-        return f"AutomatonMatch(text='{self.text}', line={self.start_line}, pos={self.start_pos})"
+        return f"AutomatonMatch(text='{self.text}', type={self.comment_type}, line={self.start_line}, pos={self.start_pos})"
 
 
 class AutomatonSearcher:
     """
-    Конечный автомат для поиска цитат в одинарных кавычках.
-    Поддерживает экранированные символы: \' \\ \n \t и др.
+    Конечный автомат для поиска комментариев C++.
+    Поддерживает:
+    - Однострочные комментарии: // текст до конца строки
+    - Многострочные комментарии: /* текст */ (включая переносы строк)
     """
     
     def __init__(self):
         """Инициализация автомата"""
-        self.current_state = AutomatonState.START
-        self.quote_start_pos = -1
-        self.quote_start_line = -1
-        self.quote_start_col = -1
-        self.quote_chars = []
-        
-        # Множество символов, которые могут быть экранированы
-        self.escape_chars = {"'", "\\", "n", "t", "r", "f", "b", "v", "0"}
-        
+        self.reset()
+    
     def reset(self):
         """Сброс автомата в начальное состояние"""
         self.current_state = AutomatonState.START
-        self.quote_start_pos = -1
-        self.quote_start_line = -1
-        self.quote_start_col = -1
-        self.quote_chars = []
+        self.comment_start_pos = -1
+        self.comment_start_line = -1
+        self.comment_start_col = -1
+        self.comment_chars = []
+        self.comment_type = ""
     
     def _update_line_info(self, text: str, position: int) -> Tuple[int, int, int]:
         """
@@ -70,18 +69,7 @@ class AutomatonSearcher:
     
     def find_matches(self, text: str) -> List[AutomatonMatch]:
         """
-        Поиск всех цитат в тексте с использованием конечного автомата
-        
-        Алгоритм:
-        1. Проходит по каждому символу текста
-        2. В зависимости от текущего состояния и символа переходит в новое состояние
-        3. При обнаружении закрывающей кавычки сохраняет найденную цитату
-        
-        Args:
-            text: исходный текст
-            
-        Returns:
-            Список найденных цитат
+        Поиск всех комментариев в тексте с использованием конечного автомата
         """
         matches = []
         self.reset()
@@ -101,187 +89,145 @@ class AutomatonSearcher:
             self.current_state = next_state
             i += 1
         
-        # Если остались незакрытые кавычки - игнорируем
-        if self.current_state == AutomatonState.IN_QUOTE:
-            # Незакрытая цитата - не сохраняем
-            pass
-        
         return matches
     
     def _transition(self, char: str) -> AutomatonState:
         """
         Функция переходов автомата
-        
-        Таблица переходов:
-        ┌─────────────┬─────────┬──────────┬────────┐
-        │ Состояние   │  '      │  \       │ other  │
-        ├─────────────┼─────────┼──────────┼────────┤
-        │ START       │ IN_QUOTE│ START    │ START  │
-        │ IN_QUOTE    │ QUOTE_END│ ESCAPE  │ IN_QUOTE│
-        │ ESCAPE      │ IN_QUOTE│ IN_QUOTE │ IN_QUOTE│
-        │ QUOTE_END   │ IN_QUOTE│ QUOTE_END│ START  │
-        └─────────────┴─────────┴──────────┴────────┘
         """
         if self.current_state == AutomatonState.START:
-            if char == "'":
-                return AutomatonState.IN_QUOTE
+            if char == '/':
+                return AutomatonState.SLASH
             return AutomatonState.START
             
-        elif self.current_state == AutomatonState.IN_QUOTE:
-            if char == "'":
-                return AutomatonState.QUOTE_END
-            elif char == "\\":
-                return AutomatonState.ESCAPE
-            return AutomatonState.IN_QUOTE
+        elif self.current_state == AutomatonState.SLASH:
+            if char == '/':
+                return AutomatonState.SINGLE_LINE
+            elif char == '*':
+                return AutomatonState.MULTI_LINE
+            return AutomatonState.START
             
-        elif self.current_state == AutomatonState.ESCAPE:
-            # После escape переходим обратно в IN_QUOTE (любой символ)
-            return AutomatonState.IN_QUOTE
+        elif self.current_state == AutomatonState.SINGLE_LINE:
+            if char == '\n':
+                return AutomatonState.END_COMMENT
+            return AutomatonState.SINGLE_LINE
             
-        elif self.current_state == AutomatonState.QUOTE_END:
-            if char == "'":
-                # Вложенная кавычка? Начинаем новую цитату
-                return AutomatonState.IN_QUOTE
-            else:
-                # Возвращаемся в START
-                return AutomatonState.START
+        elif self.current_state == AutomatonState.MULTI_LINE:
+            if char == '*':
+                return AutomatonState.MULTI_LINE_STAR
+            return AutomatonState.MULTI_LINE
+            
+        elif self.current_state == AutomatonState.MULTI_LINE_STAR:
+            if char == '/':
+                return AutomatonState.END_COMMENT
+            elif char == '*':
+                return AutomatonState.MULTI_LINE_STAR
+            return AutomatonState.MULTI_LINE
+            
+        elif self.current_state == AutomatonState.END_COMMENT:
+            return AutomatonState.START
         
         return AutomatonState.START
     
     def _action(self, char: str, position: int, text: str) -> Optional[AutomatonMatch]:
         """
         Действия при переходах между состояниями
-        
-        Действия:
-        - START -> IN_QUOTE: запомнить начало цитаты
-        - IN_QUOTE: добавить символ в буфер
-        - IN_QUOTE -> QUOTE_END: сохранить найденную цитату
-        - ESCAPE: добавить экранированный символ (с обработкой)
         """
         
-        if self.current_state == AutomatonState.START and char == "'":
-            # Начало цитаты
-            self.quote_start_pos = position
+        # START -> SLASH: запоминаем позицию
+        if self.current_state == AutomatonState.START and char == '/':
+            self.comment_start_pos = position
             line, col, _ = self._update_line_info(text, position)
-            self.quote_start_line = line
-            self.quote_start_col = col
-            self.quote_chars = []
+            self.comment_start_line = line
+            self.comment_start_col = col
+            self.comment_chars = [char]
+            self.comment_type = ""
             
-        elif self.current_state == AutomatonState.IN_QUOTE:
-            if char != "\\":  # Не escape символ
-                self.quote_chars.append(char)
+        # SLASH -> SINGLE_LINE: начало однострочного комментария
+        elif self.current_state == AutomatonState.SLASH and char == '/':
+            self.comment_chars.append(char)
+            self.comment_type = "single_line"
+            
+        # SLASH -> MULTI_LINE: начало многострочного комментария
+        elif self.current_state == AutomatonState.SLASH and char == '*':
+            self.comment_chars.append(char)
+            self.comment_type = "multi_line"
+            
+        # SLASH -> START: не комментарий, сброс
+        elif self.current_state == AutomatonState.SLASH and char not in ['/', '*']:
+            self.comment_chars = []
+            self.comment_start_pos = -1
+            
+        # Внутри однострочного комментария: добавляем символы
+        elif self.current_state == AutomatonState.SINGLE_LINE:
+            if char != '\n':
+                self.comment_chars.append(char)
             else:
-                # Escape символ - добавим его в следующем шаге
-                pass
+                self.comment_chars.append(char)
                 
-        elif self.current_state == AutomatonState.ESCAPE:
-            # Обработка экранированного символа
-            escaped_char = self._process_escape(char)
-            self.quote_chars.append(escaped_char)
+        # Внутри многострочного комментария: добавляем символы
+        elif self.current_state == AutomatonState.MULTI_LINE:
+            self.comment_chars.append(char)
             
-        elif self.current_state == AutomatonState.QUOTE_END:
-            # Нашли закрывающую кавычку - сохраняем цитату
-            if self.quote_chars:
-                quote_text = ''.join(self.quote_chars)
+        # Внутри MULTI_LINE_STAR: добавляем символы
+        elif self.current_state == AutomatonState.MULTI_LINE_STAR:
+            self.comment_chars.append(char)
+            
+        # Конец комментария - сохраняем
+        elif self.current_state == AutomatonState.END_COMMENT:
+            if self.comment_chars:
+                comment_text = ''.join(self.comment_chars)
                 
-                # Вычисляем позиции конца
                 end_line, end_col, _ = self._update_line_info(text, position)
                 
-                # Начальная абсолютная позиция (кавычка не включается)
-                absolute_start = self.quote_start_pos + 1
-                absolute_end = position  # позиция закрывающей кавычки
+                absolute_start = self.comment_start_pos
+                absolute_end = position
+                
+                start_pos_adjusted = self.comment_start_col + 1
                 
                 match = AutomatonMatch(
-                    text=quote_text,
-                    start_line=self.quote_start_line + 1,  # 1-based для пользователя
-                    start_pos=self.quote_start_col + 2,    # +2 т.к. после открывающей кавычки
+                    text=comment_text,
+                    start_line=self.comment_start_line + 1,
+                    start_pos=start_pos_adjusted,
                     end_line=end_line + 1,
-                    end_pos=end_col,
+                    end_pos=end_col + 1,
                     absolute_start=absolute_start,
                     absolute_end=absolute_end,
-                    length=len(quote_text)
+                    length=len(comment_text),
+                    comment_type=self.comment_type
                 )
                 
-                # Сброс для следующей цитаты
-                self.quote_chars = []
+                # Сброс для следующего комментария
+                self.comment_chars = []
+                self.comment_type = ""
                 return match
         
         return None
     
-    def _process_escape(self, char: str) -> str:
-        """
-        Обработка escape-последовательностей
-        
-        Поддерживаются:
-        \\' - одинарная кавычка
-        \\\\ - обратный слеш
-        \\n - новая строка
-        \\t - табуляция
-        \\r - возврат каретки
-        \\f - подача страницы
-        \\b - backspace
-        \\v - вертикальная табуляция
-        \\0 - null символ
-        """
-        escape_map = {
-            "'": "'",
-            "\\": "\\",
-            "n": "\n",
-            "t": "\t",
-            "r": "\r",
-            "f": "\f",
-            "b": "\b",
-            "v": "\v",
-            "0": "\0"
-        }
-        
-        if char in escape_map:
-            return escape_map[char]
-        return char  # Неизвестная escape-последовательность - оставляем как есть
-    
     def get_state_diagram(self) -> str:
-        """
-        Возвращает текстовое представление диаграммы состояний автомата
-        """
+        """Возвращает текстовое представление диаграммы состояний"""
         diagram = """
-        Диаграмма состояний конечного автомата для поиска цитат:
+        Диаграмма состояний для поиска комментариев C++:
         
-                              ┌─────────────────┐
-                              │                 │
-                              ▼                 │
-        ┌───────┐    '     ┌─────────┐    '    ┌───────────┐
-        │ START │─────────►│ IN_QUOTE│────────►│ QUOTE_END │
-        └───────┘          └─────────┘         └───────────┘
-           │  ▲                 │  ▲                 │  ▲
-           │  │                 │  │                 │  │
-           │  │ other           │  │ other          │  │ '
-           │  │                 │  │                 │  │
-           │  └─────────────────┘  │                 │  │
-           │         other         │                 │  │
-           │                       │                 │  │
-           │    ┌─────────┐        │                 │  │
-           └────┤ ESCAPE  │◄───────┘                 │  │
-                └─────────┘        \                 │  │
-                    │                                 │  │
-                    └─────────────────────────────────┘  │
-                              any char                   │
-                                                         │
-                    ┌────────────────────────────────────┘
-                    │
-                    ▼
-              (сохранить цитату)
+        START --'/'--> SLASH --'/'--> SINGLE_LINE --'\\n'--> END_COMMENT
+                              |
+                              '*' 
+                              |
+                              v
+                          MULTI_LINE --'*'--> MULTI_LINE_STAR --'/'--> END_COMMENT
+                              ^                |
+                              |                |
+                              +----'*'---------+
         """
         return diagram
 
 
 class AutomatonVisualizer:
-    """Класс для визуализации работы автомата (для отладки)"""
+    """Класс для визуализации работы автомата"""
     
     @staticmethod
     def trace_search(text: str, searcher: AutomatonSearcher) -> List[Dict]:
-        """
-        Трассировка работы автомата: запись всех переходов
-        """
+        """Трассировка работы автомата"""
         trace = []
         searcher.reset()
         
@@ -293,16 +239,35 @@ class AutomatonVisualizer:
             old_state = searcher.current_state
             new_state = searcher._transition(char)
             
+            # Определяем тип события
+            is_comment_start = False
+            is_comment_end = False
+            event_type = ""
+            
+            if old_state == AutomatonState.SLASH and char == '/':
+                is_comment_start = True
+                event_type = "🔵 НАЧАЛО // комментария"
+            elif old_state == AutomatonState.SLASH and char == '*':
+                is_comment_start = True
+                event_type = "🔵 НАЧАЛО /* комментария"
+            elif old_state == AutomatonState.SINGLE_LINE and char == '\n':
+                is_comment_end = True
+                event_type = "🟢 КОНЕЦ // комментария"
+            elif old_state == AutomatonState.MULTI_LINE_STAR and char == '/':
+                is_comment_end = True
+                event_type = "🟢 КОНЕЦ */ комментария"
+            
             trace.append({
                 'position': i,
                 'char': char,
                 'old_state': old_state.name,
                 'new_state': new_state.name,
-                'is_quote_start': (old_state == AutomatonState.START and char == "'"),
-                'is_quote_end': (old_state == AutomatonState.IN_QUOTE and char == "'")
+                'is_comment_start': is_comment_start,
+                'is_comment_end': is_comment_end,
+                'event_type': event_type
             })
             
-            # Выполняем действие (но не сохраняем в trace)
+            # Выполняем действие
             searcher._action(char, i, text)
             searcher.current_state = new_state
             i += 1
@@ -313,23 +278,19 @@ class AutomatonVisualizer:
     def print_trace(trace: List[Dict]):
         """Вывод трассировки в консоль"""
         print("\n" + "="*80)
-        print("Трассировка работы автомата:")
+        print("Трассировка работы автомата (поиск комментариев C++):")
         print("="*80)
-        print(f"{'Поз.':<6} {'Символ':<8} {'Состояние→':<15} {'Событие':<30}")
+        print(f"{'Поз.':<6} {'Символ':<10} {'Состояние→':<20} {'Событие':<35}")
         print("-"*80)
         
         for step in trace:
             pos = step['position']
             char = repr(step['char'])[1:-1] if step['char'] != '\n' else '\\n'
+            if step['char'] == ' ':
+                char = '␣'
             trans = f"{step['old_state']} → {step['new_state']}"
+            event = step['event_type'] if step['event_type'] else ""
             
-            if step['is_quote_start']:
-                event = "🔵 НАЧАЛО ЦИТАТЫ"
-            elif step['is_quote_end']:
-                event = "🟢 КОНЕЦ ЦИТАТЫ"
-            else:
-                event = ""
-            
-            print(f"{pos:<6} {char:<8} {trans:<15} {event:<30}")
+            print(f"{pos:<6} {char:<10} {trans:<20} {event:<35}")
         
         print("="*80 + "\n")

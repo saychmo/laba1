@@ -287,3 +287,28 @@ class QuoteSearcher:
         """Выводит трассировку в консоль"""
         trace = self.trace_automaton_search(text)
         AutomatonVisualizer.print_trace(trace)
+
+    # Добавить в класс QuoteSearcher:
+
+    def find_matches_comments_automaton(self, text: str) -> List[QuoteMatch]:
+        """Поиск комментариев C++ с использованием конечного автомата"""
+        from automaton_searcher import AutomatonSearcher
+    
+        if not text:
+            return []
+    
+        automaton = AutomatonSearcher()
+        automaton_matches = automaton.find_matches(text)
+    
+        # Конвертируем AutomatonMatch в QuoteMatch для совместимости
+        comments = []
+        for match in automaton_matches:
+            comments.append(QuoteMatch(
+                text=match.text,
+                line=match.start_line,
+                start_pos=match.start_pos,
+                end_pos=match.start_pos + match.length - 1,
+                absolute_pos=match.absolute_start
+            ))
+    
+        return comments
