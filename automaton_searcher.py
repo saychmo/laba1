@@ -89,6 +89,31 @@ class AutomatonSearcher:
             self.current_state = next_state
             i += 1
         
+        # КОРРЕКЦИЯ: Сохраняем последний комментарий, если текст не заканчивается на \n
+        if self.current_state == AutomatonState.SINGLE_LINE and self.comment_chars:
+            # Убираем последний символ, если это не \n
+            comment_text = ''.join(self.comment_chars)
+            
+            # Если последний символ не \n, то это конец файла
+            if comment_text and comment_text[-1] != '\n':
+                end_pos = len(text) - 1
+                end_line, end_col, _ = self._update_line_info(text, end_pos)
+                
+                start_pos_adjusted = self.comment_start_col + 1
+                
+                match = AutomatonMatch(
+                    text=comment_text,
+                    start_line=self.comment_start_line + 1,
+                    start_pos=start_pos_adjusted,
+                    end_line=end_line + 1,
+                    end_pos=end_col + 1,
+                    absolute_start=self.comment_start_pos,
+                    absolute_end=end_pos,
+                    length=len(comment_text),
+                    comment_type=self.comment_type
+                )
+                matches.append(match)
+        
         return matches
     
     def _transition(self, char: str) -> AutomatonState:
@@ -203,23 +228,6 @@ class AutomatonSearcher:
                 return match
         
         return None
-    
-    def get_state_diagram(self) -> str:
-        """Возвращает текстовое представление диаграммы состояний"""
-        diagram = """
-        Диаграмма состояний для поиска комментариев C++:
-        
-        START --'/'--> SLASH --'/'--> SINGLE_LINE --'\\n'--> END_COMMENT
-                              |
-                              '*' 
-                              |
-                              v
-                          MULTI_LINE --'*'--> MULTI_LINE_STAR --'/'--> END_COMMENT
-                              ^                |
-                              |                |
-                              +----'*'---------+
-        """
-        return diagram
 
 
 class AutomatonVisualizer:

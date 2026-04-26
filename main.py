@@ -118,64 +118,60 @@ class TextEditor(QMainWindow):
         search_group = QGroupBox("Поиск подстрок")
         layout = QHBoxLayout()
         
-        # Метка
         self.search_label = QLabel("Тип поиска:")
         layout.addWidget(self.search_label)
         
-        # ВЫПАДАЮЩИЙ СПИСОК ДЛЯ ВЫБОРА ТИПА ПОИСКА
         self.search_type_combo = QComboBox()
         search_types = self.searcher.get_search_types_list()
         for search_type, type_name in search_types:
             self.search_type_combo.addItem(type_name, search_type)
-        self.search_type_combo.setMinimumWidth(250)
+        self.search_type_combo.setMinimumWidth(350)
         self.search_type_combo.currentIndexChanged.connect(self.on_search_type_changed)
         layout.addWidget(self.search_type_combo)
         
-        # Поле для пользовательского шаблона (изначально скрыто)
         self.custom_pattern_edit = QLineEdit()
         self.custom_pattern_edit.setPlaceholderText("Введите регулярное выражение...")
         self.custom_pattern_edit.setVisible(False)
         self.custom_pattern_edit.setMinimumWidth(200)
         layout.addWidget(self.custom_pattern_edit)
         
-        # Кнопка применения пользовательского шаблона
         self.apply_custom_btn = QPushButton("Применить")
         self.apply_custom_btn.setVisible(False)
         self.apply_custom_btn.clicked.connect(self.apply_custom_pattern)
         layout.addWidget(self.apply_custom_btn)
         
-        # Кнопка запуска поиска
-        self.search_button = QPushButton("Найти")
+        self.search_button = QPushButton("Найти (regex)")
         self.search_button.clicked.connect(self.search_quotes)
-        self.search_button.setMinimumWidth(80)
+        self.search_button.setMinimumWidth(100)
         layout.addWidget(self.search_button)
         
-        # Кнопка автоматного поиска
+        # Кнопка автоматного поиска комментариев
         self.automaton_button = QPushButton("Автоматный поиск комментариев")
         self.automaton_button.clicked.connect(self.search_comments_automaton)
-        self.automaton_button.setMinimumWidth(180)
-        self.automaton_button.setToolTip("Поиск комментариев C++ с использованием конечного автомата")
+        self.automaton_button.setMinimumWidth(200)
+        self.automaton_button.setToolTip("Поиск комментариев C++ (// и /* */) с использованием конечного автомата")
         layout.addWidget(self.automaton_button)
-    
-        # Кнопка трассировки автомата
+        
+        # Кнопка трассировки
         self.trace_button = QPushButton("Трассировка")
         self.trace_button.clicked.connect(self.show_automaton_trace)
         self.trace_button.setMinimumWidth(100)
-        self.trace_button.setToolTip("Показать трассировку работы конечного автомата (пошаговый разбор)")
+        self.trace_button.setToolTip("Показать трассировку работы автомата")
         layout.addWidget(self.trace_button)
-
-        # Кнопка очистки результатов
+        
         self.clear_button = QPushButton("Очистить")
         self.clear_button.clicked.connect(self.clear_results)
+        self.clear_button.setMinimumWidth(80)
         layout.addWidget(self.clear_button)
         
-        # Метка для отображения количества найденных совпадений
         self.count_label = QLabel("Найдено: 0")
         self.count_label.setStyleSheet("QLabel { font-weight: bold; color: #2c3e50; }")
         layout.addWidget(self.count_label)
+        
         self.info_label = QLabel("💡 Поддерживаются: комментарии C++, MAC-адреса, цитаты, числа, слова | 🔍 Автоматный поиск комментариев C++")
         self.info_label.setStyleSheet("QLabel { color: #7f8c8d; font-size: 10pt; }")
         layout.addWidget(self.info_label)
+        
         layout.addStretch()
         search_group.setLayout(layout)
         
@@ -1083,28 +1079,28 @@ class TextEditor(QMainWindow):
         """Поиск комментариев C++ с использованием конечного автомата"""
         if self._updating:
             return
-    
+        
         self._updating = True
-    
+        
         try:
             text = self.editor.toPlainText()
-        
+            
             if not text.strip():
                 QMessageBox.warning(self, "Предупреждение", "Введите текст для поиска")
                 return
-        
+            
             # Выполняем автоматный поиск комментариев
             self.current_matches = self.searcher.find_matches_comments_automaton(text)
-        
-            # Очищаем таблицу
+            
+            # Очищаем таблицу результатов
             self.results_table.setRowCount(0)
-        
+            
             if not self.current_matches:
                 self.count_label.setText("Найдено: 0")
                 QMessageBox.information(self, "Результаты поиска", "Комментарии не найдены")
                 self.status_bar.showMessage("Комментарии не найдены")
                 return
-        
+            
             # Заполняем таблицу результатов
             for row, match in enumerate(self.current_matches):
                 self.results_table.insertRow(row)
@@ -1112,77 +1108,84 @@ class TextEditor(QMainWindow):
                 position_text = f"строка {match.line}, символ {match.start_pos}"
                 self.results_table.setItem(row, 1, QTableWidgetItem(position_text))
                 self.results_table.setItem(row, 2, QTableWidgetItem(str(match.length)))
-        
+            
             self.count_label.setText(f"Найдено: {len(self.current_matches)}")
-        
-            # Логирование
-            if self.output_table:
-                row = self.output_table.rowCount()
-                self.output_table.insertRow(row)
-                self.output_table.setItem(row, 0, QTableWidgetItem("АВТОМАТ"))
-                self.output_table.setItem(row, 1, QTableWidgetItem("Конечный автомат"))
-                self.output_table.setItem(row, 2, QTableWidgetItem(
-                    f"Найдено комментариев C++: {len(self.current_matches)}"
-                ))
-                self.output_table.setItem(row, 3, QTableWidgetItem(datetime.now().strftime("%H:%M:%S")))
-        
+            
+            # Логирование в output_table
+            row = self.output_table.rowCount()
+            self.output_table.insertRow(row)
+            self.output_table.setItem(row, 0, QTableWidgetItem("АВТОМАТ"))
+            self.output_table.setItem(row, 1, QTableWidgetItem("Конечный автомат"))
+            self.output_table.setItem(row, 2, QTableWidgetItem(
+                f"Найдено комментариев C++: {len(self.current_matches)}"
+            ))
+            self.output_table.setItem(row, 3, QTableWidgetItem(datetime.now().strftime("%H:%M:%S")))
+            
             self.status_bar.showMessage(f"Автоматный поиск: найдено {len(self.current_matches)} комментариев")
-        
-            # Показываем трассировку в таблице
-            self.show_automaton_trace(text[:200])  # Показываем трассировку первых 200 символов
-        
+            
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Ошибка при поиске:\n{str(e)}")
         finally:
             self._updating = False
 
-
     def show_automaton_trace(self):
         """Показать трассировку работы автомата"""
         text = self.editor.toPlainText()
-    
+        
         if not text.strip():
             QMessageBox.warning(self, "Предупреждение", "Введите текст для трассировки")
             return
-    
-    # Получаем трассировку
-        trace = self.searcher.trace_automaton_search(text[:100])  # Ограничим 100 символами
-    
-    # Формируем текст для вывода
-        trace_text = "ТРАССИРОВКА РАБОТЫ АВТОМАТА\n"
-        trace_text += "="*60 + "\n"
-        trace_text += f"{'Поз.':<6} {'Символ':<8} {'Переход':<20} {'Событие'}\n"
-        trace_text += "-"*60 + "\n"
-    
-        for step in trace:
-            char = repr(step['char'])[1:-1] if step['char'] != '\n' else '\\n'
-            trans = f"{step['old_state']} → {step['new_state']}"
-            event = ""
-            if step['is_quote_start']:
-                event = "🔵 НАЧАЛО ЦИТАТЫ"
-            elif step['is_quote_end']:
-                event = "🟢 КОНЕЦ ЦИТАТЫ"
         
-            trace_text += f"{step['position']:<6} {char:<8} {trans:<20} {event}\n"
-    
-        trace_text += "="*60 + "\n"
-    
-    # Выводим в таблицу
+        from automaton_searcher import AutomatonSearcher, AutomatonVisualizer
+        
+        automaton = AutomatonSearcher()
+        
+        # Получаем трассировку (ограничиваем 200 символами для читаемости)
+        trace_text_display = text[:200]
+        trace = AutomatonVisualizer.trace_search(trace_text_display, automaton)
+        
+        # Формируем текст для вывода
+        trace_output = "ТРАССИРОВКА РАБОТЫ АВТОМАТА (поиск комментариев C++)\n"
+        trace_output += "="*70 + "\n"
+        trace_output += f"{'Поз.':<6} {'Символ':<8} {'Переход':<25} {'Событие'}\n"
+        trace_output += "-"*70 + "\n"
+        
+        for step in trace:
+            char = repr(step['char'])[1:-1] if step['char'] != '\n' else '↵'
+            if step['char'] == ' ':
+                char = '␣'
+            trans = f"{step['old_state']} → {step['new_state']}"
+            event = step['event_type'] if step['event_type'] else ""
+            
+            trace_output += f"{step['position']:<6} {char:<8} {trans:<25} {event}\n"
+        
+        trace_output += "="*70 + "\n"
+        trace_output += "\nЛЕГЕНДА:\n"
+        trace_output += "START - начальное состояние\n"
+        trace_output += "SLASH - найден '/'\n"
+        trace_output += "SINGLE_LINE - внутри // комментария\n"
+        trace_output += "MULTI_LINE - внутри /* комментария\n"
+        trace_output += "MULTI_LINE_STAR - найден '*' внутри /* */\n"
+        trace_output += "END_COMMENT - конец комментария\n"
+        trace_output += "🔵 - начало комментария\n"
+        trace_output += "🟢 - конец комментария\n"
+        
+        # Выводим в таблицу
         row = self.output_table.rowCount()
         self.output_table.insertRow(row)
         self.output_table.setItem(row, 0, QTableWidgetItem("ТРАССИРОВКА"))
         self.output_table.setItem(row, 1, QTableWidgetItem("Автомат"))
-        self.output_table.setItem(row, 2, QTableWidgetItem(trace_text))
+        self.output_table.setItem(row, 2, QTableWidgetItem(trace_output))
         self.output_table.setItem(row, 3, QTableWidgetItem(datetime.now().strftime("%H:%M:%S")))
-    
+        
         QMessageBox.information(self, "Трассировка автомата", 
             "Трассировка добавлена в таблицу результатов\n\n"
             "Легенда:\n"
-            "🔵 - начало цитаты (открывающая кавычка)\n"
-            "🟢 - конец цитаты (закрывающая кавычка)\n"
-            "START → IN_QUOTE - переход в режим чтения цитаты\n"
-            "IN_QUOTE → QUOTE_END - завершение цитаты")
-
+            "🔵 НАЧАЛО // комментария - найдена последовательность //\n"
+            "🔵 НАЧАЛО /* комментария - найдена последовательность /*\n"
+            "🟢 КОНЕЦ // комментария - найден символ новой строки\n"
+            "🟢 КОНЕЦ */ комментария - найдена последовательность */")
+        
     def show_about(self):
         """Информация о программе"""
         about_text = """
