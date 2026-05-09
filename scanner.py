@@ -44,7 +44,12 @@ class Scanner:
     
     def is_whitespace(self, c):
         return c in ' \t\r'
-    
+
+    # Символы, которые "закрывают" текущую лексему: пробелы и
+    # любой структурный токен языка. Всё, что не в этом списке,
+    # считается частью текущей последовательности.
+    _STOP_CHARS = ' \t\r\n=|;'
+
     def add_token(self, token_type, value, line, start, end):
         if token_type != TokenType.WHITESPACE:
             self.tokens.append(Token(token_type, value, line, start, end))
@@ -72,9 +77,59 @@ class Scanner:
             start_line = self.current_line
             
             # Ключевое слово "type"
-            if text.startswith("type", i) and (i + 4 >= n or not self.is_letter(text[i+4])):
-                self.add_token(TokenType.KEYWORD, "type", start_line, start_pos, start_pos + 3)
-                i += 4
+            if c == 't':
+
+                j = i
+
+                while j < n and (
+                    self.is_letter(text[j]) or
+                    self.is_digit(text[j]) or
+                    text[j] == '_'
+                ):
+                    j += 1
+
+                # Если сразу после слова идёт недопустимый символ
+                # (не пробел и не структурный разделитель),
+                # вся "слипшаяся" последовательность считается
+                # одной лексической ошибкой.
+                if j < n and text[j] not in self._STOP_CHARS:
+                    while j < n and text[j] not in self._STOP_CHARS:
+                        j += 1
+                    value = text[i:j]
+                    self.add_token(
+                        TokenType.ERROR,
+                        value,
+                        start_line,
+                        start_pos,
+                        start_pos + len(value) - 1
+                    )
+                    i = j
+                    continue
+
+                value = text[i:j]
+
+                # корректный type
+                if value == "type":
+
+                    self.add_token(
+                        TokenType.KEYWORD,
+                        value,
+                        start_line,
+                        start_pos,
+                        start_pos + len(value) - 1
+                    )
+
+                else:
+                    # неправильное написание type
+                    self.add_token(
+                        TokenType.ERROR,
+                        value,
+                        start_line,
+                        start_pos,
+                        start_pos + len(value) - 1
+                    )
+
+                i = j
                 continue
             
             # Идентификатор (буква + буквы/цифры)
@@ -82,6 +137,23 @@ class Scanner:
                 j = i
                 while j < n and (self.is_letter(text[j]) or self.is_digit(text[j]) or text[j] == '_'):
                     j += 1
+
+                # Идентификатор, "слипшийся" с недопустимым символом,
+                # — целиком одна лексическая ошибка.
+                if j < n and text[j] not in self._STOP_CHARS:
+                    while j < n and text[j] not in self._STOP_CHARS:
+                        j += 1
+                    value = text[i:j]
+                    self.add_token(
+                        TokenType.ERROR,
+                        value,
+                        start_line,
+                        start_pos,
+                        start_pos + len(value) - 1
+                    )
+                    i = j
+                    continue
+
                 value = text[i:j]
                 self.add_token(TokenType.IDENTIFIER, value, start_line, start_pos, start_pos + len(value) - 1)
                 i = j
@@ -107,13 +179,28 @@ class Scanner:
             
             # Ошибка: собираем все недопустимые символы подряд
             j = i
+
             while j < n:
+
                 ch = text[j]
-                if self.is_letter(ch) or self.is_digit(ch) or ch in '=|; \t\r\n':
+
+                # продолжаем собирать
+                # всё подряд до разделителя
+                if ch in ' \t\r\n=|;':
                     break
+
                 j += 1
+
             value = text[i:j]
-            self.add_token(TokenType.ERROR, value, start_line, start_pos, start_pos + len(value) - 1)
+
+            self.add_token(
+                TokenType.ERROR,
+                value,
+                start_line,
+                start_pos,
+                start_pos + len(value) - 1
+            )
+
             i = j
         
         return self.tokens
