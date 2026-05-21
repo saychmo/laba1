@@ -1,13 +1,6 @@
-# parser.py
-# Синтаксический анализатор объявления перечислений F#
-
 from typing import List, Optional, Tuple
 from scanner import Token, TokenType
 
-
-# =========================================================
-# КЛАСС ОШИБКИ
-# =========================================================
 
 class ParserError:
     def __init__(self,
@@ -25,28 +18,36 @@ class ParserError:
         return f"{self.line}:{self.position} -> {self.message}"
 
 
-# =========================================================
-# AST
-# =========================================================
-
 class ASTNode:
+
     def __init__(self, node_type: str):
+
         self.node_type = node_type
+
         self.children: List['ASTNode'] = []
 
+    def add_child(self, child):
 
+        self.children.append(child)
+
+
+class CaseNode(ASTNode):
+
+    def __init__(self, name: str):
+
+        super().__init__("CaseNode")
+
+        self.name = name
+
+        
 class EnumDeclarationNode(ASTNode):
 
-    def __init__(self, type_name: str, cases: List[str]):
-        super().__init__("EnumDeclaration")
+    def __init__(self, type_name: str):
+
+        super().__init__("EnumDeclarationNode")
 
         self.type_name = type_name
-        self.cases = cases
 
-
-# =========================================================
-# ПАРСЕР
-# =========================================================
 
 class Parser:
 
@@ -71,10 +72,6 @@ class Parser:
 
         self.errors: List[ParserError] = []
 
-    # =====================================================
-    # СЛУЖЕБНЫЕ МЕТОДЫ
-    # =====================================================
-
     def current_token(self) -> Optional[Token]:
         """
         Возвращает текущий токен без побочных эффектов.
@@ -91,10 +88,6 @@ class Parser:
     def next_token(self):
 
         self.position += 1
-
-    # =====================================================
-    # МЕТОД АЙРОНСА
-    # =====================================================
 
     def synchronize(self):
 
@@ -118,23 +111,9 @@ class Parser:
 
             self.position += 1
 
-    # =====================================================
-    # CONSUME
-    # =====================================================
-
-    # позиции, где ERROR логично считать "сломанным словом"
-    # (идентификатор / ключевое слово). В структурных позициях
-    # (|, =, ;) ERROR просто проскакиваем — лексер о нём
-    # уже отчитался и плодить вторую ошибку не нужно.
     _WORD_LIKE_TYPES = {TokenType.KEYWORD, TokenType.IDENTIFIER}
 
     def consume(self, expected_type, expected_value=None):
-
-        # ==========================================
-        # Пропуск ERROR-токенов в структурных позициях.
-        # Для PIPE / OPERATOR / SEPARATOR посторонний
-        # ошибочный токен не должен сдвигать разбор.
-        # ==========================================
 
         if expected_type not in self._WORD_LIKE_TYPES:
             while (self.position < len(self.tokens)
@@ -143,20 +122,9 @@ class Parser:
 
         token = self.current_token()
 
-        # ==========================================
-        # ERROR в "словесной" позиции: трактуем как
-        # заглушку для ожидаемого KEYWORD/IDENTIFIER.
-        # Это предотвращает каскадную диагностику
-        # после уже сообщённой лексической ошибки.
-        # ==========================================
-
         if token is not None and token.type == TokenType.ERROR:
             self.position += 1
             return token
-
-        # ==========================================
-        # EOF
-        # ==========================================
 
         if token is None:
 
@@ -175,10 +143,6 @@ class Parser:
 
             return None
 
-        # ==========================================
-        # Неверный тип токена
-        # ==========================================
-
         if token.type != expected_type:
 
             self.errors.append(
@@ -190,19 +154,9 @@ class Parser:
                 )
             )
 
-            # ======================================
-            # ВАЖНО:
-            # продвигаем позицию
-            # чтобы не было каскада ошибок
-            # ======================================
-
             self.position += 1
 
             return None
-
-        # ==========================================
-        # Неверное значение
-        # ==========================================
 
         if expected_value is not None and token.value != expected_value:
 
@@ -219,16 +173,9 @@ class Parser:
 
             return None
 
-        # ==========================================
-        # OK
-        # ==========================================
-
         self.position += 1
 
         return token
-    # =====================================================
-    # PARSE
-    # =====================================================
 
     def parse(self):
         """
@@ -236,12 +183,9 @@ class Parser:
         """
         ast = self.parse_enum_declaration()
 
-        # Если AST не построен — прекращаем дальнейший анализ
-        # чтобы не было каскадных ошибок
         if ast is None:
             return None, self.errors
 
-        # Проверка лишних токенов
         current = self.current_token()
 
         if current is not None:
@@ -259,16 +203,7 @@ class Parser:
 
     def parse_enum_declaration(self):
 
-        # =====================================================
-        # type
-        # =====================================================
-
         keyword = self.consume(TokenType.KEYWORD, "type")
-
-        # =====================================================
-        # Ошибка в type — догоняем до ближайшего IDENTIFIER,
-        # чтобы продолжить разбор имени типа без каскада.
-        # =====================================================
 
         if keyword is None:
 
@@ -284,24 +219,12 @@ class Parser:
 
                 self.position += 1
 
-        # =====================================================
-        # TypeName
-        # =====================================================
-
         type_name = self.parse_type_name()
 
         if type_name is None:
             type_name = "UNKNOWN"
 
-        # =====================================================
-        # =
-        # =====================================================
-
         eq = self.consume(TokenType.OPERATOR, "=")
-
-        # =====================================================
-        # Ошибка =
-        # =====================================================
 
         if eq is None:
 
@@ -325,13 +248,6 @@ class Parser:
 
                 self.position += 1
 
-        # =====================================================
-        # CaseList
-        # =====================================================
-        # Разбираем case-list всегда: если выше уже были ошибки,
-        # recovery подвёл нас либо к ближайшему '|', либо к ';'.
-        # В любом случае дальнейший разбор не должен плодить
-        # дополнительные сообщения сверх уже выданных.
 
         cases = []
 
@@ -340,20 +256,14 @@ class Parser:
         if parsed_cases is not None:
             cases = parsed_cases
 
-        # =====================================================
-        # ;
-        # =====================================================
-
         self.consume(TokenType.SEPARATOR, ";")
 
-        # =====================================================
-        # AST
-        # =====================================================
+        node = EnumDeclarationNode(type_name)
 
-        return EnumDeclarationNode(
-            type_name,
-            cases
-        )
+        for case in cases:
+            node.add_child(case)
+
+        return node
 
     def parse_type_name(self) -> Optional[str]:
         """
@@ -366,9 +276,6 @@ class Parser:
             return None
 
         return token.value
-    # =====================================================
-    # CaseList
-    # =====================================================
 
     def parse_case_list(self):
 
@@ -380,14 +287,10 @@ class Parser:
 
             if token is None:
                 break
-            # Конец списка
+
             if token.type == TokenType.SEPARATOR:
                 break
 
-            # Случайный ERROR-токен между кейсами (или
-            # на месте первого '|', если выше уже была
-            # ошибка). Лексер уже сообщил о нём — просто
-            # пропускаем, не плодя синтаксических диагностик.
             if token.type == TokenType.ERROR:
                 self.position += 1
                 continue
@@ -398,10 +301,6 @@ class Parser:
                 cases.append(case)
 
         return cases
-
-    # =====================================================
-    # Case
-    # =====================================================
 
     def parse_case(self):
 
@@ -418,7 +317,6 @@ class Parser:
 
             return None
 
-        # IDENTIFIER
         token = self.consume(TokenType.IDENTIFIER)
 
         if token is None:
@@ -427,4 +325,42 @@ class Parser:
 
             return None
 
-        return token.value
+        return CaseNode(token.value)
+    
+def build_ast_text(node, indent="", is_last=True):
+
+    if node is None:
+        return ""
+
+    result = indent
+
+    if is_last:
+        result += "└── "
+        new_indent = indent + "    "
+    else:
+        result += "├── "
+        new_indent = indent + "│   "
+
+    result += node.node_type
+
+    # Атрибуты
+
+    if isinstance(node, EnumDeclarationNode):
+        result += f": {node.type_name}"
+
+    elif isinstance(node, CaseNode):
+        result += f": {node.name}"
+
+    result += "\n"
+
+    # Рекурсивный вывод детей
+
+    for i, child in enumerate(node.children):
+
+        result += build_ast_text(
+            child,
+            new_indent,
+            i == len(node.children) - 1
+        )
+
+    return result

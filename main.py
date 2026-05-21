@@ -8,15 +8,15 @@ from PyQt6.QtWidgets import (
     QToolBar, QStatusBar, QMessageBox, QFileDialog,
     QSplitter, QTableWidget, QTableWidgetItem, QHBoxLayout,
     QComboBox, QPushButton, QLabel, QGroupBox, QHeaderView,
-    QStyle, QLineEdit  # ДОБАВИТЬ QLineEdit
+    QStyle, QLineEdit  
 )
 from PyQt6.QtGui import QAction, QCloseEvent, QTextCursor, QFont, QKeySequence, QTextCharFormat, QColor
 from PyQt6.QtCore import Qt
 from typing import Optional
 
 from scanner import analyze_text, TokenType
-from parser import Parser, ParserError
-
+from parser import Parser, ParserError, build_ast_text
+from semantic import SemanticAnalyzer
 
 
 class TextEditor(QMainWindow):
@@ -67,7 +67,20 @@ class TextEditor(QMainWindow):
         top_layout.addWidget(self.parse_button)
         main_splitter.addWidget(top_widget)
         
-        
+        # =========================
+        # AST VIEW
+        # =========================
+
+        self.ast_output = QTextEdit()
+
+        self.ast_output.setReadOnly(True)
+
+        self.ast_output.setFont(QFont("Courier New", 11))
+
+        self.ast_output.setPlaceholderText("Здесь будет AST")
+
+        main_splitter.addWidget(self.ast_output)
+
         # Создаем третий виджет для таблицы вывода парсера
         bottom_widget = QWidget()
         bottom_layout = QVBoxLayout(bottom_widget)
@@ -105,7 +118,7 @@ class TextEditor(QMainWindow):
         
         main_splitter.addWidget(bottom_widget)
         
-        main_splitter.setSizes([500, 250])
+        main_splitter.setSizes([400, 250, 200])
         main_layout.addWidget(main_splitter)
 
         self.status_bar = QStatusBar()
@@ -552,11 +565,27 @@ class TextEditor(QMainWindow):
 
         parser = Parser(tokens)
 
-        _, syntax_errors = parser.parse()
+        ast, syntax_errors = parser.parse()
+
+        if ast is not None:
+
+            ast_text = build_ast_text(ast)
+
+            self.ast_output.setPlainText(ast_text)
+
+        else:
+
+            self.ast_output.clear()
 
         all_errors = []
+        
+        semantic_errors = []
 
-        # Лексические ошибки
+        if ast is not None:
+
+            semantic = SemanticAnalyzer()
+
+            semantic_errors = semantic.analyze(ast) or []
 
         for token in tokens:
 
@@ -577,7 +606,15 @@ class TextEditor(QMainWindow):
                 "position": f"{error.line}:{error.position}",
                 "message": error.message
             })
+        # Семантические ошибки
 
+        for error in semantic_errors:
+
+            all_errors.append({
+                "fragment": "semantic",
+                "position": f"{error.line}:{error.position}",
+                "message": error.message
+            })
         # Вывод ошибок
 
         for row, error in enumerate(all_errors):
